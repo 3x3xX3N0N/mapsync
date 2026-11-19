@@ -1,0 +1,33 @@
+{
+  "owner": "alice",
+  "nodes": [
+    {
+      "id": "coordinator",
+      "label": "Psyche",
+      "sumo": "ComputerProgram",
+      "content": "Central agent that routes work to leads",
+      "salt": "a1782bd516766789dca9efab42142272"
+    },
+    {
+      "id": "review",
+      "label": "Review readiness",
+      "sumo": "IntentionalProcess",
+      "content": "Check a change is ready for review",
+      "salt": "d71145022ae4c6bb3beff7fe29119b31"
+    },
+    {
+      "id": "notes",
+      "label": "Release note",
+      "sumo": "Text",
+      "content": "Draft of what shipped this week",
+      "salt": "af256b2286f77398584fb548bb9361e2"
+    },
+    {
+      "id": "coder",
+      "label": "Cody",
+      "sumo": "ComputerProgram",
+      "content": "Coding agent",
+      "salt": "2cf7d823a97a34f66848a0ea9eb3e145"
+    }
+  ]
+}

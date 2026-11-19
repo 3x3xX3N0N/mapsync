@@ -1,0 +1,16 @@
+{
+  "sumo_terms_sha": "e48a94d0917dccd87c37f0daf1174b85dc302814837ca2bd2998587a37bb3b29",
+  "maps": [
+    {
+      "owner": "alice",
+      "root": "89cc62cc0fcc0a6adca9cf7183176b6cb287ba92c2cd612cd390a3f8df78baef",
+      "sig_sha": "8e9f967fddaa501c961d53751445a78bf68b1e97310de239b8a6a57ab48acf88"
+    },
+    {
+      "owner": "bob",
+      "root": "31304459e5b191fdc19686f458aad4ec7565bddd6862e872efe85727e254e821",
+      "sig_sha": "9c74b3059be9f9b421fc561e197d1ac63b5cb1684836ddef848a3a6dae5967de"
+    }
+  ],
+  "top_root": "df025ea974b255f2dbcb570ce898095832dfd6213af27a1c644eb51f3a84e90c"
+}

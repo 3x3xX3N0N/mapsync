@@ -1,0 +1,15 @@
+# Curated subset of SUMO term names (https://github.com/ontologyportal/sumo).
+# This file is pinned: its sha256 is part of every map root and the top root.
+# Changing it changes every root, on purpose. Add terms deliberately.
+Agent
+Human
+Organization
+ComputerProgram
+Process
+IntentionalProcess
+Planning
+Communication
+Proposition
+Text
+Event
+TimeInterval

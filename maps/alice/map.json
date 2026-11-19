@@ -6,28 +6,37 @@
       "label": "Psyche",
       "sumo": "ComputerProgram",
       "content": "Central agent that routes work to leads",
-      "salt": "a1782bd516766789dca9efab42142272"
+      "salt": "b8fe7c5cc738ed8f52b6fd31eff4d6f2"
+    },
+    {
+      "id": "cody",
+      "label": "Cody",
+      "sumo": "ComputerProgram",
+      "content": "Alice's coding agent",
+      "salt": "b1f2851d68c32fce6a097bbe12bdc89d",
+      "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIqpG/opPs6Oe3VpNmK0zy2j7hbnOldR+CxbB0Vf/4iI"
     },
     {
       "id": "review",
       "label": "Review readiness",
       "sumo": "IntentionalProcess",
       "content": "Check a change is ready for review",
-      "salt": "d71145022ae4c6bb3beff7fe29119b31"
+      "salt": "31548772a5a80cd42025ae8f092a6ece",
+      "by": "cody",
+      "same_as": [
+        "bob:prcheck"
+      ]
     },
     {
       "id": "notes",
       "label": "Release note",
       "sumo": "Text",
       "content": "Draft of what shipped this week",
-      "salt": "af256b2286f77398584fb548bb9361e2"
-    },
-    {
-      "id": "coder",
-      "label": "Cody",
-      "sumo": "ComputerProgram",
-      "content": "Coding agent",
-      "salt": "2cf7d823a97a34f66848a0ea9eb3e145"
+      "salt": "7756af2be5479f5a5d7e4cba64f75e5c",
+      "by": "cody",
+      "same_as": [
+        "bob:changelog"
+      ]
     }
   ]
 }

@@ -3,14 +3,14 @@
   "maps": [
     {
       "owner": "alice",
-      "root": "89cc62cc0fcc0a6adca9cf7183176b6cb287ba92c2cd612cd390a3f8df78baef",
-      "sig_sha": "8e9f967fddaa501c961d53751445a78bf68b1e97310de239b8a6a57ab48acf88"
+      "root": "656b6e9d362ee0bba42bd5cef266a5ae604f5194dc55eef25ae6cbe0c983f626",
+      "sig_sha": "561c89d74f3fa9c4f043aff55408d9cc2fad217af455532da0384ecf27fda754"
     },
     {
       "owner": "bob",
-      "root": "31304459e5b191fdc19686f458aad4ec7565bddd6862e872efe85727e254e821",
-      "sig_sha": "9c74b3059be9f9b421fc561e197d1ac63b5cb1684836ddef848a3a6dae5967de"
+      "root": "2ea2aa8c1191e1d9c8e7960623187919e0c29f95191697265bcb65c2d8762af7",
+      "sig_sha": "6b2c4b5ad8d56242d3bc9d67f60cbefe3c7634dd8828d0610d7cb82169479b21"
     }
   ],
-  "top_root": "df025ea974b255f2dbcb570ce898095832dfd6213af27a1c644eb51f3a84e90c"
+  "top_root": "5063e96c07099d44d4ea013eacaebc0b089ebf151c64ebc8e05178d7cf61f7fd"
 }

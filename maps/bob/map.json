@@ -2,32 +2,44 @@
   "owner": "bob",
   "nodes": [
     {
+      "id": "cody",
+      "label": "Cody",
+      "sumo": "ComputerProgram",
+      "content": "Bob's coding agent, unrelated to Alice's",
+      "salt": "364553eea63be19cfdb6180de3385a1c",
+      "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFqIVPUJK8ZRZMWF6cE8aGsR6O5nKBmBzZECbCqU+4uv"
+    },
+    {
       "id": "orchestrator",
       "label": "the router",
       "sumo": "ComputerProgram",
       "content": "Thing that hands tasks to agents",
-      "salt": "9c1ccc721c6aab4bb3b35d7a5c00c544"
+      "salt": "2d414053e5965ee165ac817c30a68693"
     },
     {
       "id": "prcheck",
       "label": "PR check",
       "sumo": "IntentionalProcess",
       "content": "Make sure a pull request is good to go",
-      "salt": "a18df73f61e90fcab94c8c13a0519ad4"
+      "salt": "ad7c6a64dfe099c040c5f0d06aa1fe77",
+      "same_as": [
+        "alice:review"
+      ]
     },
     {
       "id": "changelog",
       "label": "Changelog",
       "sumo": "Text",
       "content": "Draft of what shipped this week",
-      "salt": "01cebda322534c4904d0bcd82d5e2628"
+      "salt": "17361c72c285da99b0a795207efe9449",
+      "by": "cody"
     },
     {
       "id": "deadline",
       "label": "Ship date",
       "sumo": "TimeInterval",
       "content": "Friday",
-      "salt": "e173abb49fc0d0e310bb1502bc91a1b2"
+      "salt": "e48d9ad70ec6ecff99f94b0fc875e9d3"
     }
   ]
 }

@@ -12,6 +12,8 @@ Stdlib only, plus `ssh-keygen` for signatures.
     python3 mapsync.py index                        rebuild index.json
     python3 mapsync.py verify                       check everything; exit 0 if green
     python3 mapsync.py diff A.json B.json           which nodes differ between two maps
+    python3 mapsync.py agent-sign MAP NODE AGENTKEY the agent itself signs a node it wrote
+    python3 mapsync.py names                        same name, different identity? (the two-Codys problem)
     python3 mapsync.py concepts                     line maps up by SUMO term, not label
     python3 mapsync.py g1                           sabotage each check; each must go red
 """
@@ -28,6 +30,12 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 TERMS = os.path.join("sumo", "terms.txt")
 NAMESPACE = "mapsync"
+AGENT_NAMESPACE = "mapsync-agent"
+OPTIONAL = ("pubkey", "by", "same_as")
+# pubkey  : this node IS an agent; its own ssh public key. Identity = this key, not the label.
+# by      : id of the agent (in this map) that wrote this node; needs agent_sigs/<id>.sig
+# same_as : ["owner:id", ...] this node is the same thing as that node. One side = claimed,
+#           both sides = linked. Never inferred from matching labels or SUMO terms.
 
 
 def sha(b: bytes) -> str:
@@ -42,8 +50,11 @@ def load_terms(base: str) -> tuple[set[str], str]:
 
 def leaf(node: dict) -> str:
     """A node's leaf hash. The salt stops anyone guessing short hidden content."""
-    canon = json.dumps({k: node[k] for k in ("id", "label", "sumo", "content", "salt")},
-                       sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    fields = {k: node[k] for k in ("id", "label", "sumo", "content", "salt")}
+    for k in OPTIONAL:                            # agent key, author, identity links: all owner-signed
+        if k in node:
+            fields[k] = node[k]
+    canon = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha(b"\x00" + canon.encode())          # 0x00 = leaf, 0x01 = inner (no 2nd-preimage mixups)
 
 
@@ -94,6 +105,89 @@ def sig_ok(base: str, owner: str, root: str) -> bool:
     return r.returncode == 0
 
 
+def load(base: str, owner: str) -> dict:
+    return json.load(open(os.path.join(base, "maps", owner, "map.json"), encoding="utf-8"))
+
+
+def agent_sign(path: str, node_id: str, key: str) -> None:
+    """The agent (not its owner) signs a node it wrote."""
+    node = next(n for n in json.load(open(path, encoding="utf-8"))["nodes"] if n["id"] == node_id)
+    r = subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", key, "-n", AGENT_NAMESPACE],
+                       input=leaf(node).encode(), capture_output=True, check=True)
+    d = os.path.join(os.path.dirname(path), "agent_sigs")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, f"{node_id}.sig"), "wb").write(r.stdout)
+    print(f"{node['by']} signed {node_id}")
+
+
+def agent_sig_ok(base: str, owner: str, node: dict, agents: dict) -> str | None:
+    """None if good, else the reason it isn't."""
+    a = agents.get(node["by"])
+    if a is None:
+        return f"by={node['by']!r} is not an agent node (no pubkey) in {owner}'s map"
+    sig = os.path.join(base, "maps", owner, "agent_sigs", f"{node['id']}.sig")
+    if not os.path.exists(sig):
+        return "no agent signature"
+    with tempfile.NamedTemporaryFile("w", delete=False) as f:
+        f.write(f"agent {a['pubkey']}\n")
+    try:
+        r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", f.name, "-I", "agent",
+                            "-n", AGENT_NAMESPACE, "-s", sig], input=leaf(node).encode(), capture_output=True)
+    finally:
+        os.unlink(f.name)
+    return None if r.returncode == 0 else f"signature is not by {owner}:{node['by']}'s key"
+
+
+def identity_checks(base: str, say) -> bool:
+    """Agent-authored nodes carry the agent's own signature; same_as targets exist."""
+    ok = True
+    exists = {f"{o}:{n['id']}" for o in owners(base) for n in load(base, o)["nodes"]}
+    for o in owners(base):
+        nodes = load(base, o)["nodes"]
+        agents = {n["id"]: n for n in nodes if "pubkey" in n}
+        for n in nodes:
+            if "by" in n:
+                why = agent_sig_ok(base, o, n, agents)
+                say(f"{'ok ' if why is None else 'RED'}  {o}:{n['id']} written by agent {o}:{n['by']}"
+                    + ("" if why is None else f": {why}"))
+                ok &= why is None
+            for t in n.get("same_as", []):
+                if t not in exists:
+                    say(f"RED  {o}:{n['id']} same_as {t}: no such node")
+                    ok = False
+    return ok
+
+
+def names(base: str) -> None:
+    """Same label, different identities = collision. Same thing only if same_as says so."""
+    by_label: dict[str, list[str]] = {}
+    links: dict[str, set[str]] = {}
+    keys: dict[str, str] = {}
+    for o in owners(base):
+        for n in load(base, o)["nodes"]:
+            ref = f"{o}:{n['id']}"
+            by_label.setdefault(n["label"].casefold(), []).append(ref)
+            links[ref] = set(n.get("same_as", []))
+            if "pubkey" in n:
+                keys[ref] = "key " + sha(n["pubkey"].encode())[:8]
+    for label, refs in sorted(by_label.items()):
+        if len({r.split(":")[0] for r in refs}) < 2:
+            continue
+        for i, a in enumerate(refs):
+            for b in refs[i + 1:]:
+                mutual = b in links[a] and a in links[b]
+                tag = "LINKED (both sides signed same_as)" if mutual else \
+                      "CLAIMED (one side only)" if (b in links[a] or a in links[b]) else \
+                      "COLLISION: same name, different identities"
+                ka, kb = keys.get(a, "no key"), keys.get(b, "no key")
+                print(f"{label!r:12} {a} [{ka}]  vs  {b} [{kb}]  -> {tag}")
+    print("-- same_as links across different labels:")
+    for a, ts in sorted(links.items()):
+        for b in sorted(ts):
+            mutual = a in links.get(b, set())
+            print(f"   {a} -> {b}  {'LINKED' if mutual else 'CLAIMED (one side only)'}")
+
+
 def build_index(base: str) -> dict:
     _, terms_sha = load_terms(base)
     entries = []
@@ -117,6 +211,7 @@ def verify(base: str, quiet: bool = False) -> bool:
         good = sig_ok(base, e["owner"], e["root"])
         say(f"{'ok ' if good else 'RED'}  {e['owner']}: root {e['root'][:16]}… signature {'valid' if good else 'INVALID'}")
         ok &= good
+    ok &= identity_checks(base, say)
     stored = json.load(open(os.path.join(base, "index.json")))
     same = stored == fresh
     say(f"{'ok ' if same else 'RED'}  index.json top_root {stored.get('top_root', '?')[:16]}… "
@@ -168,6 +263,10 @@ def g1() -> bool:
         ("swap the two signatures", lambda d: [shutil.move(os.path.join(d, "maps", *x), os.path.join(d, "maps", *y))
                                                for x, y in ((("alice", "root.sig"), ("t",)), (("bob", "root.sig"), ("alice", "root.sig")),
                                                             (("t",), ("bob", "root.sig")))], False),
+        ("delete an agent's signature on its node", lambda d: os.remove(os.path.join(d, "maps", "alice", "agent_sigs", "notes.sig")), False),
+        ("move an agent signature onto another node", lambda d: shutil.copy(os.path.join(d, "maps", "alice", "agent_sigs", "notes.sig"),
+                                                                            os.path.join(d, "maps", "alice", "agent_sigs", "review.sig")), False),
+        ("point same_as at a node that doesn't exist", edit_map("bob", lambda m: first(m).update(same_as=["alice:nope"])), False),
         ("edit the pinned SUMO term list", lambda d: open(os.path.join(d, TERMS), "a").write("Unicorn\n"), False),
         ("rewrite index.json top_root", lambda d: (lambda p, j: json.dump({**j, "top_root": "0" * 64}, open(p, "w")))(
             os.path.join(d, "index.json"), json.load(open(os.path.join(d, "index.json")))), False),
@@ -187,6 +286,28 @@ def g1() -> bool:
         good = got == want
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    # names: the two Codys must be reported as a collision, and only a mutual same_as may clear it
+    import contextlib, io
+    def names_out(d):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            names(d)
+        return buf.getvalue()
+    for name, sabotage, want in [
+        ("names: two Codys reported as COLLISION", lambda d: None, True),
+        ("names: mutual same_as turns it into LINKED", lambda d: [edit_map(o, lambda m, o=o: next(n for n in m["nodes"] if n["id"] == "cody")
+                                                                  .update(same_as=[f"{'bob' if o == 'alice' else 'alice'}:cody"]))(d) for o in ("alice", "bob")], False),
+    ]:
+        d = tempfile.mkdtemp()
+        try:
+            shutil.copytree(os.path.join(HERE, "maps"), os.path.join(d, "maps"))
+            sabotage(d)
+            got = "'cody'" in names_out(d).split("-- same_as")[0] and "COLLISION" in names_out(d).split("-- same_as")[0]
+        finally:
+            shutil.rmtree(d)
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> collision {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
     print("G1: every sabotage went red, baseline green" if all_ok else "G1 FAILED: a check cannot go red")
     return all_ok
 
@@ -206,6 +327,10 @@ if __name__ == "__main__":
         sys.exit(0 if verify(HERE) else 1)
     elif cmd == "diff":
         diff(a[1], a[2])
+    elif cmd == "agent-sign":
+        agent_sign(a[1], a[2], a[3])
+    elif cmd == "names":
+        names(HERE)
     elif cmd == "concepts":
         concepts(HERE)
     elif cmd == "g1":

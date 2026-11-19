@@ -54,6 +54,40 @@ Three layers, each solving one part:
 - **Privacy.** Each node has a random salt, so a published root reveals nothing, and
   short hidden content can't be guessed by hashing candidates.
 
+### The two-Codys problem: names are labels, keys are identities
+
+Two people each have an AI agent (a familiar) called **Cody**. Both are tagged
+`ComputerProgram`. Match on name or SUMO term and they merge: work for one shows up
+under the other, and "Cody said X" can't be traced. The reverse failure also happens:
+one agent called "Cody" in one place and "the coder" in another gets split in two.
+
+The rule: **a label is a nickname you pick; identity is a key.**
+
+- **Owner scoping.** Every node lives under its owner's signed map, so the identity is
+  `alice:cody`, not `cody`, the way two Codys get different email domains.
+- **Each agent has its own key.** An agent node carries `pubkey`. The owner signing the
+  map is the owner saying "this key is my agent, and I call it Cody."
+- **Agents sign their own work.** A node with `by: "cody"` must carry a signature from
+  *that agent's* key (`agent_sigs/<node>.sig`). The owner can't fake it, and neither can
+  the other Cody: a node signed by Alice's Cody fails as Bob's Cody.
+- **Same thing only by explicit, signed link.** `same_as: ["bob:prcheck"]` says "my node
+  is that node." One side only = **claimed**; both sides = **linked**. SUMO says two
+  things are the same *kind*; only `same_as` says they're the same *thing*. Nothing
+  is ever inferred from matching names.
+
+```
+$ python3 mapsync.py names
+'cody'       alice:cody [key b35d00c4]  vs  bob:cody [key a8dad593]  -> COLLISION: same name, different identities
+-- same_as links across different labels:
+   alice:notes -> bob:changelog  CLAIMED (one side only)
+   alice:review -> bob:prcheck  LINKED
+   bob:prcheck -> alice:review  LINKED
+```
+
+This is Zooko's triangle: a name can't be readable, globally unique, *and* free of a
+central registry at once. Keys are unique without a registry but unreadable; "Cody" is
+readable but not unique. Use both, and let the key be the one that counts.
+
 ### The part hashing can't do
 
 A hash tree proves everything *below* the top. Nothing inside it can prove the top.
@@ -70,13 +104,14 @@ Stdlib Python 3 plus `ssh-keygen` (for signatures). No dependencies.
 python3 mapsync.py verify     # every map signed by its owner, index matches a rebuild
 python3 mapsync.py g1         # sabotage each check in a sandbox; every one must go red
 python3 mapsync.py concepts   # line the maps up by meaning, not by label
+python3 mapsync.py names      # same name, different identity? (the two Codys)
 python3 mapsync.py diff maps/alice/map.json maps/bob/map.json
 ```
 
 `concepts` on the two example maps:
 
 ```
-ComputerProgram      alice:'Psyche', alice:'Cody', bob:'the router'
+ComputerProgram      alice:'Psyche', alice:'Cody', bob:'Cody', bob:'the router'
 IntentionalProcess   alice:'Review readiness', bob:'PR check'
 Text                 alice:'Release note', bob:'Changelog'
 TimeInterval         bob:'Ship date'
@@ -96,12 +131,16 @@ python3 mapsync.py sign maps/me/map.json ~/.ssh/mapsync_me
 python3 mapsync.py index && python3 mapsync.py verify
 ```
 
-A node is `{id, label, sumo, content, salt}`. Use a fresh random `salt` per node.
+A node is `{id, label, sumo, content, salt}`, plus optionally `pubkey` (this node is an
+agent), `by` (an agent in this map wrote it) and `same_as` (list of `owner:id`). Use a
+fresh random `salt` per node. An agent signs what it wrote with
+`python3 mapsync.py agent-sign maps/me/map.json NODE AGENT_KEY`, then the owner re-signs
+the map.
 
 ## Open problems (not solved here)
 
-- **SUMO's upper terms are coarse.** `concepts` above lumps the coordinator agent and
-  the coding agent together as `ComputerProgram`. Real use needs SUMO's mid-level and
+- **SUMO's upper terms are coarse.** `concepts` above lumps the coordinator and both
+  Codys together as `ComputerProgram`. Real use needs SUMO's mid-level and
   domain terms (MILO and others), or local subclasses declared on top of SUMO.
 - **Tagging is work.** Nobody will hand-pick from tens of thousands of terms. The
   realistic path is a suggester (WordNet→SUMO mappings, or an LLM) proposing a tag and a
@@ -110,7 +149,10 @@ A node is `{id, label, sumo, content, salt}`. Use a fresh random `salt` per node
   The goal is that everyone sees the same *set of signed claims*, side by side and
   attributed, not that a merge picks a winner. Contradiction checks would need a
   reasoner over SUMO's axioms (e.g. Sigma), which this prototype doesn't do.
-- **Keys.** Lost or stolen keys, rotation, and revocation aren't handled.
+- **Keys.** Lost or stolen keys, rotation, and revocation aren't handled, for owners or
+  agents. An agent's key changing today means a "new" agent.
+- **Cross-key forgery isn't in `g1`.** The sandbox has no private keys, so "Alice's Cody
+  signs Bob's node" was checked by hand (it goes red), not automatically.
 - **Anchoring isn't automated.** `top_root` is printed. Publishing it is up to you.
 - **Who collects the roots.** Anyone can rebuild `index.json` from the maps and check it,
   so whoever runs it is a messenger, not an authority. Making it append-only (a log of

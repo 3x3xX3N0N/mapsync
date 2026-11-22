@@ -7,7 +7,9 @@ import tempfile
 
 from .files import append_text, read_json, write_json
 from .identity import names_report
-from .index import verify, write_index
+from .hashing import merkle
+from .index import entry_hash, verify, write_index
+from .log import ZERO, canonical, entry_for, entry_sha, log_path, read_lines
 from .proofs import check_proof, prove
 from .sync import sync_report
 from .vocab import TERMS
@@ -21,6 +23,8 @@ def sandbox(base: str, d: str | None = None) -> str:
         shutil.copytree(os.path.join(base, x), os.path.join(d, x))
     for x in ("index.json", "allowed_signers"):
         shutil.copy(os.path.join(base, x), d)
+    if os.path.exists(log_path(base)):
+        shutil.copytree(os.path.join(base, "log"), os.path.join(d, "log"))
     return d
 
 
@@ -66,6 +70,46 @@ VERIFY_ROWS = [
     ("point same_as at a node that doesn't exist", edit_map("bob", lambda m: _first(m).update(same_as=["alice:nope"])), False),
     ("edit the pinned SUMO term list", lambda d: append_text(os.path.join(d, TERMS), "Unicorn\n"), False),
     ("rewrite index.json top_root", _rewrite_top, False),
+]
+
+
+def _with_history(d):
+    """Fixture: a two-entry log. seq 0 = the state before bob joined (alice's map only),
+    seq 1 = the current index. Built without keys: a log records roots, it signs nothing."""
+    idx = read_json(os.path.join(d, "index.json"))
+    early = {**idx, "maps": idx["maps"][:1]}
+    early["top_root"] = merkle([entry_hash(e) for e in early["maps"]] + [idx["sumo_terms_sha"]])
+    e0 = entry_for(early, 0, ZERO, now=1_700_000_000)
+    e1 = entry_for(idx, 1, entry_sha(canonical(e0)), now=1_700_086_400)
+    os.makedirs(os.path.dirname(log_path(d)), exist_ok=True)
+    with open(log_path(d), "wb") as f:
+        f.write(canonical(e0) + b"\n" + canonical(e1) + b"\n")
+
+
+def _edit_log(fn):
+    """Install the history fixture, then rewrite the log's lines with fn(lines) -> lines."""
+    def go(d):
+        _with_history(d)
+        lines = fn(read_lines(log_path(d)))
+        with open(log_path(d), "wb") as f:
+            f.write(b"".join(x + b"\n" for x in lines))
+    return go
+
+
+def _restamp_first(lines):
+    import json
+    e = json.loads(lines[0])
+    e["recorded_at"] = "2023-11-15T00:00:00Z"   # backdate seq 0, re-serialized canonically
+    return [canonical(e)] + lines[1:]
+
+
+# (name, sabotage(dir), verify should be green?) -- on top of a two-entry log
+LOG_ROWS = [
+    ("log: a two-entry history stays green", _with_history, True),
+    ("rewrite a past log entry", _edit_log(_restamp_first), False),
+    ("drop a log entry", _edit_log(lambda ls: ls[1:]), False),
+    ("reorder the log's lines", _edit_log(lambda ls: ls[::-1]), False),
+    ("index newer than the log head", _edit_log(lambda ls: ls[:-1]), False),
 ]
 
 
@@ -148,6 +192,11 @@ def run_row(base: str, sabotage, check) -> bool:
 def g1(base: str) -> bool:
     all_ok = True
     for name, sabotage, want in VERIFY_ROWS:
+        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    for name, sabotage, want in LOG_ROWS:
         got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
         good = got == want
         all_ok &= good

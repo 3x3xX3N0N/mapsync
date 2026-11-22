@@ -20,6 +20,9 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py prove OWNER NODE [-o FILE]   inclusion proof revealing just that node
     python3 mapsync.py check-proof FILE             check a proof alone; exit 0 if valid
     python3 mapsync.py sync-check OTHER [SECOND]    same top root? else walk down to owner, node
+    python3 mapsync.py log append                   publish the current state: append top_root to log/roots.jsonl
+    python3 mapsync.py log show | log verify        list / check the hash-chained log of past top roots
+    python3 mapsync.py log compare OTHER_LOG        prefix = consistent history; else FORK at seq N (exit 1)
 
 Global option: --base DIR (default: this repo) = the world to work on. A relative map
 path is looked up under --base when one is given (else relative to the current dir).
@@ -37,6 +40,7 @@ from mapsynclib.g1 import g1
 from mapsynclib.hashing import map_root
 from mapsynclib.identity import names
 from mapsynclib.index import verify, write_index
+from mapsynclib import log as rootlog
 from mapsynclib.files import read_json, write_json
 from mapsynclib.proofs import check_proof, prove
 from mapsynclib.signing import agent_sign, sign
@@ -81,7 +85,33 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--top-root", help="also require this top_root")
     s = add("sync-check", "compare with another world (dir or index.json); exit 0 if in sync", "other")
     s.add_argument("second", nargs="?", help="compare OTHER with this instead of with --base")
+    lg = add("log", "append-only hash-chained log of past top roots (log/roots.jsonl)")
+    lsub = lg.add_subparsers(dest="log_cmd", metavar="LOGCOMMAND", required=True)
+    lsub.add_parser("append", help="rebuild index if needed; append top_root if it changed", parents=[common])
+    lsub.add_parser("show", help="list the log entries", parents=[common])
+    lsub.add_parser("verify", help="chain intact and head == index.json; exit 0 if so", parents=[common])
+    lsub.add_parser("compare", help="is one log a prefix of the other? exit 1 on fork",
+                    parents=[common]).add_argument("other", help="the other roots.jsonl")
     return p
+
+
+def log_cmd(a, base: str) -> int:
+    try:
+        if a.log_cmd == "append":
+            _, msg = rootlog.append(base)
+            print(msg)
+        elif a.log_cmd == "show":
+            print("\n".join(rootlog.show(base)))
+        elif a.log_cmd == "verify":
+            return 0 if rootlog.log_checks(base, print, required=True) else 1
+        elif a.log_cmd == "compare":
+            ok, lines = rootlog.compare(rootlog.log_path(base), a.other)
+            print("\n".join(lines))
+            return 0 if ok else 1
+    except (ValueError, OSError, KeyError) as e:
+        print(f"log {a.log_cmd}: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
         sign(P(a.map), a.key, base)
     elif cmd == "index":
         print(f"top_root {write_index(base)['top_root']}")
+        if os.path.exists(rootlog.log_path(base)):
+            print("note: index.json is not published until `log append` records it", file=sys.stderr)
+    elif cmd == "log":
+        return log_cmd(a, base)
     elif cmd == "verify":
         return 0 if verify(base) else 1
     elif cmd == "diff":

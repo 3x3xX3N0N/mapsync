@@ -101,7 +101,7 @@ into "this was our map at time X."
 Stdlib Python 3 plus `ssh-keygen` (for signatures). No dependencies.
 
 ```bash
-python3 mapsync.py verify     # every map signed by its owner, index matches a rebuild
+python3 mapsync.py verify     # every map signed by its owner, index matches a rebuild and is the log head
 python3 mapsync.py g1         # sabotage each check in a sandbox; every one must go red
 python3 mapsync.py concepts   # line the maps up by meaning, not by label
 python3 mapsync.py names      # same name, different identity? (the two Codys)
@@ -122,7 +122,8 @@ TimeInterval         bob:'Ship date'
 term list, the index) and requires `verify` to go red. Further rows tamper with a proof
 (revealed node, audit-path hash, a left/right flag, the claimed owner) and require
 `check-proof` to go red, and change one node in a copy of the world and require
-`sync-check` to name it.
+`sync-check` to name it. Log rows rewrite, drop and reorder past entries of the root log,
+and leave the index ahead of the log head.
 
 ### Add your own map
 
@@ -131,7 +132,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/mapsync_me               # once
 echo "me $(cut -d' ' -f1,2 ~/.ssh/mapsync_me.pub)" >> allowed_signers
 mkdir maps/me && $EDITOR maps/me/map.json                # same shape as the examples
 python3 mapsync.py sign maps/me/map.json ~/.ssh/mapsync_me
-python3 mapsync.py index && python3 mapsync.py verify
+python3 mapsync.py log append && python3 mapsync.py verify   # rebuild index + record it in the log
 ```
 
 A node is `{id, label, sumo, content, salt}`, plus optionally `pubkey` (this node is an
@@ -179,6 +180,45 @@ with the same root but a new signature shows as re-signed. A world whose `index.
 doesn't match its own maps gets a warning. `sync-check` compares what was published.
 `verify` is what checks the signatures.
 
+### History: an append-only log of top roots
+
+`index.json` only shows the current state. `log/roots.jsonl` keeps every top root that was
+published, one canonical JSON line per state (`sort_keys`, no spaces):
+
+```
+{"maps":[{"owner":"alice","root":"656b…"},{"owner":"bob","root":"2ea2…"}],"prev":"0000…","recorded_at":"2026-11-20T04:17:24Z","seq":0,"sumo_terms_sha":"e48a…","top_root":"5063…"}
+```
+
+Each line's `prev` is `sha256(0x02 || previous line's bytes)` (64 zeros for seq 0), so every
+entry commits to the whole history before it. Change a past entry, drop one or reorder them,
+and every later `prev` stops matching.
+
+```bash
+python3 mapsync.py log append                 # publish: rebuild index.json if stale, append if top_root changed
+python3 mapsync.py log show                   # seq, time, top_root, entry sha, owners' roots
+python3 mapsync.py log verify                 # chain intact and head == index.json; exit 0 if so
+python3 mapsync.py log compare THEIR_roots.jsonl   # OK if one is a prefix of the other; FORK at seq N = exit 1
+```
+
+- **`log append` is how you publish a new state.** It refuses if any owner signature or
+  identity check fails. It is idempotent: an unchanged top_root appends nothing. `index`
+  still works, but it only rebuilds `index.json` and warns that the new state isn't
+  published yet.
+- **`verify` checks the log too.** If `log/roots.jsonl` exists, the chain must be intact
+  (`seq` 0,1,2,… contiguous, each `prev` correct, every line canonical) and the head must
+  record exactly the current `index.json` (top_root, owners' roots, vocabulary). Otherwise
+  it reports `RED  current index is not the log head`. A world without a log gets a note
+  and stays green, so older worlds keep verifying.
+- **Forks.** Two honest copies of a log differ only in length: one is a prefix of the
+  other. Anything else means someone showed different histories to different people, and
+  `log compare` names the first `seq` where they diverge. Keep a copy of the log (or anchor
+  its head) to catch a rewrite. A log that's been rewritten and re-chained is internally
+  consistent, so only a comparison with an old copy can expose it.
+
+`g1` builds a two-entry history in its sandbox (alice alone, then alice and bob). It then
+rewrites a past entry, drops one, reorders them, and leaves the index ahead of the log
+head, and `verify` has to go red for each.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -195,7 +235,7 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `demo`, `g1`). Tests in `tests/` use
+`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `log`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)
@@ -215,9 +255,11 @@ Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashi
 - **Cross-key forgery isn't in `g1`.** The sandbox has no private keys, so "Alice's Cody
   signs Bob's node" was checked by hand (it goes red), not automatically.
 - **Anchoring isn't automated.** `top_root` is printed. Publishing it is up to you.
-- **Who collects the roots.** Anyone can rebuild `index.json` from the maps and check it,
-  so whoever runs it is a messenger, not an authority. Making it append-only (a log of
-  past top roots) is the next step.
+- **The log can be withheld or rewritten whole.** `log/roots.jsonl` (see "History") makes
+  quiet edits to the past break the chain, but whoever keeps it can still skip publishing
+  an entry, or rewrite history and re-link every later line. Both show up only when someone
+  runs `log compare` against a copy they kept (or an anchored head). Nobody signs log
+  entries yet, and nobody is forced to keep a copy.
 
 ## Lineage
 

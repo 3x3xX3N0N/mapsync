@@ -57,5 +57,7 @@ def verify(base: str, quiet: bool = False) -> bool:
     say(f"{'ok ' if same else 'RED'}  index.json top_root {stored.get('top_root', '?')[:16]}… "
         f"{'matches' if same else 'does NOT match'} a rebuild from the maps")
     ok &= same
+    from .log import log_checks                   # log imports index; import late
+    ok &= log_checks(base, say)
     say("GREEN: every map signed by its owner, index matches" if ok else "RED")
     return ok

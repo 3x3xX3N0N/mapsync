@@ -49,6 +49,9 @@ def sync_report(a: str, b: str) -> tuple[bool, list[str]]:
     if A["sumo_terms_sha"] != B["sumo_terms_sha"]:
         out.append(f"! vocabulary differs: sumo_terms_sha {A['sumo_terms_sha'][:16]}… vs "
                    f"{B['sumo_terms_sha'][:16]}… (every root changes with it)")
+    if A.get("vocab_sha") != B.get("vocab_sha"):
+        out.append(f"! vocabulary hierarchy differs: vocab_sha {str(A.get('vocab_sha'))[:16]}… vs "
+                   f"{str(B.get('vocab_sha'))[:16]}… (only maps using local terms change root with it)")
     ea = {e["owner"]: e for e in A["maps"]}
     eb = {e["owner"]: e for e in B["maps"]}
     for o in sorted(ea.keys() | eb.keys()):

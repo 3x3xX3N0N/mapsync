@@ -14,9 +14,10 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py diff A.json B.json           which nodes differ between two maps
     python3 mapsync.py agent-sign MAP NODE AGENTKEY the agent itself signs a node it wrote
     python3 mapsync.py names                        same name, different identity? (the two-Codys problem)
-    python3 mapsync.py concepts                     line maps up by SUMO term, not label
+    python3 mapsync.py concepts [--flat]            line maps up by SUMO term, as a tree of subclasses
+    python3 mapsync.py vocab [TERM]                 check the pinned hierarchy / show a term's ancestors
     python3 mapsync.py g1                           sabotage each check; each must go red
-    python3 mapsync.py demo DIR                     build a fresh signed example world in DIR
+    python3 mapsync.py demo DIR [--local-terms]     build a fresh signed example world in DIR
     python3 mapsync.py prove OWNER NODE [-o FILE]   inclusion proof revealing just that node
     python3 mapsync.py check-proof FILE             check a proof alone; exit 0 if valid
     python3 mapsync.py sync-check OTHER [SECOND]    same top root? else walk down to owner, node
@@ -55,7 +56,7 @@ from mapsynclib.files import read_json, write_json
 from mapsynclib.proofs import check_proof, prove
 from mapsynclib.signing import agent_sign, sign
 from mapsynclib.sync import sync_report
-from mapsynclib.vocab import concepts
+from mapsynclib.vocab import concepts, vocab_report
 from mapsynclib.world import diff
 
 
@@ -85,9 +86,14 @@ def parser() -> argparse.ArgumentParser:
     add("diff", "which nodes differ between two maps", "a", "b")
     add("agent-sign", "the agent itself signs a node it wrote", "map", "node", "key")
     add("names", "same name, different identity? (two-Codys problem)")
-    add("concepts", "line maps up by SUMO term, not label")
+    add("concepts", "line maps up by SUMO term: a tree under the pinned hierarchy") \
+        .add_argument("--flat", action="store_true", help="one line per term, no hierarchy (the old output)")
+    add("vocab", "validate sumo/hierarchy.txt, local.txt, disjoint.txt; or show TERM's place") \
+        .add_argument("term", nargs="?")
     add("g1", "sabotage each check; each must go red")
-    add("demo", "build a fresh signed example world (ephemeral keys in DIR/keys)", "dir")
+    add("demo", "build a fresh signed example world (ephemeral keys in DIR/keys)", "dir") \
+        .add_argument("--local-terms", action="store_true",
+                      help="tag the Codys CodingAgent and the routers RoutingAgent (local terms)")
     add("prove", "inclusion proof for one node (others only as hashes)", "owner", "node") \
         .add_argument("-o", "--out", help="write the proof here (default: stdout)")
     c = add("check-proof", "check a proof on its own; exit 0 if valid", "file")
@@ -227,7 +233,15 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "names":
         names(base)
     elif cmd == "concepts":
-        concepts(base)
+        try:
+            concepts(base, a.flat)
+        except ValueError as e:
+            print(f"concepts: {e} (try --flat)", file=sys.stderr)
+            return 1
+    elif cmd == "vocab":
+        ok, lines = vocab_report(base, a.term)
+        print("\n".join(lines))
+        return 0 if ok else 1
     elif cmd == "g1":
         return 0 if g1(base) else 1
     elif cmd == "prove":
@@ -256,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(lines))
         return 0 if same else 1
     elif cmd == "demo":
-        w = make_world(os.path.abspath(a.dir))
+        w = make_world(os.path.abspath(a.dir), local_terms=a.local_terms)
         print(f"world in {w['base']}  top_root {w['top_root']}")
         for k, v in {**w["owners"], **w["agents"]}.items():
             print(f"  key {k:10} {v}")

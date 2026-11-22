@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 
-from tests.worlds import REPO, demo_world, shipped_copy
+from tests.worlds import REPO, SHIPPED_TOP, demo_world, shipped_copy
 from mapsynclib.files import write_bytes
 from mapsynclib.index import write_index
 from mapsynclib.signing import sign
@@ -24,7 +24,7 @@ class Sync(unittest.TestCase):
     def test_in_sync_with_copy(self):
         same, lines = sync_report(REPO, shipped_copy(self))
         self.assertTrue(same)
-        self.assertEqual(lines, ["IN SYNC  top_root 5063e96c07099d44…"])
+        self.assertEqual(lines, [f"IN SYNC  top_root {SHIPPED_TOP[:16]}…"])
 
     def test_one_changed_node_named(self):
         b = shipped_copy(self)
@@ -47,13 +47,13 @@ class Sync(unittest.TestCase):
         m["nodes"].append({"id": "extra", "label": "x", "sumo": "Text", "content": "y", "salt": "z"})
         save(b, "bob", m)
         shutil.rmtree(os.path.join(b, "maps", "alice"))
-        os.makedirs(os.path.join(b, "maps", "carol"))
-        save(b, "carol", {"owner": "carol", "nodes": []})
-        write_bytes(os.path.join(b, "maps", "carol", "root.sig"), b"none")
+        os.makedirs(os.path.join(b, "maps", "dave"))
+        save(b, "dave", {"owner": "dave", "nodes": []})
+        write_bytes(os.path.join(b, "maps", "dave", "root.sig"), b"none")
         write_index(b)
         same, lines = sync_report(REPO, b)
         self.assertFalse(same)
-        for want in ("- alice  only here", "+ carol  only there", "    - bob:deadline  only here",
+        for want in ("- alice  only here", "+ dave  only there", "    - bob:deadline  only here",
                      "    + bob:extra  only there"):
             self.assertIn(want, lines)
 

@@ -13,11 +13,12 @@ from . import keys as keychain
 from .files import append_text, read_json, write_json
 from .identity import names_report
 from .hashing import merkle
-from .index import entry_hash, verify, write_index
+from .index import top_leaves, verify, write_index
 from .log import ZERO, canonical, entry_for, entry_sha, log_path, read_lines
 from .proofs import check_proof, prove
 from .sync import sync_report
-from .vocab import TERMS
+from . import REPO
+from .vocab import HIERARCHY, LOCAL, TERMS, VOCAB_FILES, load_vocab
 from .world import load, save
 
 
@@ -86,7 +87,7 @@ def _with_history(d):
     seq 1 = the current index. Built without keys: a log records roots, it signs nothing."""
     idx = read_json(os.path.join(d, "index.json"))
     early = {**idx, "maps": idx["maps"][:1]}
-    early["top_root"] = merkle([entry_hash(e) for e in early["maps"]] + [idx["sumo_terms_sha"]])
+    early["top_root"] = merkle(top_leaves(early))
     e0 = entry_for(early, 0, ZERO, now=1_700_000_000)
     e1 = entry_for(idx, 1, entry_sha(canonical(e0)), now=1_700_086_400)
     shutil.rmtree(anchors_dir(d), ignore_errors=True)   # receipts belonged to the replaced history
@@ -275,6 +276,50 @@ KEY_ROWS = [
 ]
 
 
+def _local_world(local_terms: bool = True):
+    """Fixture: replace the sandbox's world with a freshly keyed demo world whose Codys are
+    CodingAgent and routers RoutingAgent (local terms, so both maps pin vocab_sha), or with
+    base terms only (local_terms=False). Same vocabulary files as the sandbox. No log/anchors."""
+    def go(d):
+        for x in ("maps", "log", ANCHORS):
+            shutil.rmtree(os.path.join(d, x), ignore_errors=True)
+        for x in ("index.json", "allowed_signers", WITNESSES):
+            if os.path.exists(os.path.join(d, x)):
+                os.remove(os.path.join(d, x))
+        if local_terms and not all(load_vocab(d).is_local(t) for t in ("CodingAgent", "RoutingAgent")):
+            for f in VOCAB_FILES:                 # an older world: borrow this repo's hierarchy
+                shutil.copy(os.path.join(REPO, f), os.path.join(d, f))
+        kw = os.path.join(d, "vocabworld")
+        make_world(kw, terms_from=d, local_terms=local_terms)
+        shutil.copytree(os.path.join(kw, "maps"), os.path.join(d, "maps"))
+        for x in ("allowed_signers", "index.json"):
+            shutil.copy(os.path.join(kw, x), d)
+    return go
+
+
+def _then(*steps):
+    def go(d):
+        for f in steps:
+            f(d)
+    return go
+
+
+def _edit_local(d):
+    append_text(os.path.join(d, LOCAL), "\nTestingAgent ComputerProgram\n")
+
+
+# (name, sabotage(dir), verify should be green?) -- the pinned hierarchy (sumo/*.txt)
+VOCAB_ROWS = [
+    ("vocab: maps tagged with local terms stay green", _local_world(), True),
+    ("vocab: edit local.txt, no map uses it: green", _then(_local_world(False), _edit_local, write_index), True),
+    ("edit sumo/local.txt under a map that uses it", _then(_local_world(), _edit_local, write_index), False),
+    ("introduce a subclass cycle", lambda d: append_text(os.path.join(d, HIERARCHY), "IntentionalProcess Planning\n"), False),
+    ("local term under an unknown parent", lambda d: append_text(os.path.join(d, LOCAL), "Gadget Gizmo\n"), False),
+    ("redefine a base term in local.txt", lambda d: append_text(os.path.join(d, LOCAL), "Text Proposition\n"), False),
+    ("a class under two disjoint classes", lambda d: append_text(os.path.join(d, HIERARCHY), "Text Proposition\n"), False),
+]
+
+
 def _link_codys(d):
     for o, other in (("alice", "bob"), ("bob", "alice")):
         edit_map(o, lambda m, other=other: next(n for n in m["nodes"] if n["id"] == "cody")
@@ -308,6 +353,8 @@ PROOF_ROWS = [
     ("tamper a proof's audit path", lambda p: _step(p).update(hash=_step(p)["hash"][::-1]), False),
     ("flip a left/right flag in a proof's path", lambda p: _step(p, 1).update(side=_flip(_step(p, 1)["side"])), False),
     ("claim the proven node is bob's", lambda p: p.update(owner="bob"), False),
+    ("tamper the hierarchy files in a proof", lambda p: p.setdefault("vocab", {}).update(
+        {LOCAL: p.get("vocab", {}).get(LOCAL, "") + "Gadget ComputerProgram\n"}), False),
 ]
 
 
@@ -369,6 +416,11 @@ def g1(base: str) -> bool:
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
     for name, sabotage, want in KEY_ROWS:
+        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    for name, sabotage, want in VOCAB_ROWS:
         got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
         good = got == want
         all_ok &= good

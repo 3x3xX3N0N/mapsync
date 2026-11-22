@@ -15,7 +15,7 @@ from . import REPO
 from .files import read_text
 from .index import write_index
 from .signing import agent_sign, sign
-from .vocab import TERMS
+from .vocab import TERMS, VOCAB_FILES
 from .world import map_path, save
 
 
@@ -31,21 +31,24 @@ def _node(id, label, sumo, content, **extra) -> dict:
     return {"id": id, "label": label, "sumo": sumo, "content": content, "salt": secrets.token_hex(16), **extra}
 
 
-def demo_maps(pub: dict) -> dict:
-    """The shipped example's maps, with the given agent public keys and fresh salts."""
+def demo_maps(pub: dict, local_terms: bool = False) -> dict:
+    """The shipped example's maps, with the given agent public keys and fresh salts.
+    local_terms: tag both Codys CodingAgent and the coordinator/router RoutingAgent (local
+    subclasses of ComputerProgram from sumo/local.txt), so those maps pin vocab_sha."""
+    code, route = ("CodingAgent", "RoutingAgent") if local_terms else ("ComputerProgram", "ComputerProgram")
     return {
         "alice": {"owner": "alice", "nodes": [
-            _node("coordinator", "Psyche", "ComputerProgram", "Central agent that routes work to leads"),
-            _node("cody", "Cody", "ComputerProgram", "Alice's coding agent", pubkey=pub["alice:cody"]),
+            _node("coordinator", "Psyche", route, "Central agent that routes work to leads"),
+            _node("cody", "Cody", code, "Alice's coding agent", pubkey=pub["alice:cody"]),
             _node("review", "Review readiness", "IntentionalProcess", "Check a change is ready for review",
                   by="cody", same_as=["bob:prcheck"]),
             _node("notes", "Release note", "Text", "Draft of what shipped this week",
                   by="cody", same_as=["bob:changelog"]),
         ]},
         "bob": {"owner": "bob", "nodes": [
-            _node("cody", "Cody", "ComputerProgram", "Bob's coding agent, unrelated to Alice's",
+            _node("cody", "Cody", code, "Bob's coding agent, unrelated to Alice's",
                   pubkey=pub["bob:cody"]),
-            _node("orchestrator", "the router", "ComputerProgram", "Thing that hands tasks to agents"),
+            _node("orchestrator", "the router", route, "Thing that hands tasks to agents"),
             _node("prcheck", "PR check", "IntentionalProcess", "Make sure a pull request is good to go",
                   same_as=["alice:review"]),
             _node("changelog", "Changelog", "Text", "Draft of what shipped this week", by="cody"),
@@ -71,12 +74,17 @@ def add_witness(base: str, name: str, keydir: str | None = None) -> str:
     return key
 
 
-def make_world(dir: str, terms_from: str = REPO) -> dict:
-    """Build a full signed world in `dir`. Returns
+def make_world(dir: str, terms_from: str = REPO, local_terms: bool = False) -> dict:
+    """Build a full signed world in `dir`. The vocabulary (terms.txt and whichever of
+    hierarchy/local/disjoint.txt exist) is copied from `terms_from`. local_terms: see
+    demo_maps (needs sumo/local.txt declaring CodingAgent and RoutingAgent). Returns
     {"base": dir, "owners": {owner: private_key_path}, "agents": {"owner:agent": private_key_path},
      "pubkeys": {name: "ssh-ed25519 AAAA..."}, "top_root": ...}."""
     os.makedirs(os.path.join(dir, "sumo"), exist_ok=True)
     shutil.copy(os.path.join(terms_from, TERMS), os.path.join(dir, TERMS))
+    for f in VOCAB_FILES:
+        if os.path.exists(os.path.join(terms_from, f)):
+            shutil.copy(os.path.join(terms_from, f), os.path.join(dir, f))
     kd = os.path.join(dir, "keys")
     keys = {"owners": {}, "agents": {}}
     pub = {}
@@ -89,7 +97,7 @@ def make_world(dir: str, terms_from: str = REPO) -> dict:
     with open(os.path.join(dir, "allowed_signers"), "w") as f:
         for o in keys["owners"]:
             f.write(f"{o} {pub[o]}\n")
-    for o, m in demo_maps(pub).items():
+    for o, m in demo_maps(pub, local_terms).items():
         os.makedirs(os.path.join(dir, "maps", o), exist_ok=True)
         save(dir, o, m)
         for n in m["nodes"]:

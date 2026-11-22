@@ -1,0 +1,14 @@
+# SUMO subclass edges among the base terms in terms.txt: `Child Parent`.
+# Pinned: hashed into vocab_sha (with local.txt and disjoint.txt), which the index commits to
+# and every map using a local term signs. Curated from SUMO's Merge.kif / Mid-level-ontology.kif
+# (https://github.com/ontologyportal/sumo). Where SUMO has classes in between that are not
+# base terms here, the edge is the transitive one and the skipped classes are named.
+IntentionalProcess Process          # (subclass IntentionalProcess Process)
+Planning IntentionalProcess         # via IntentionalPsychologicalProcess
+Communication IntentionalProcess    # via SocialInteraction
+Human Agent                         # via Hominid ... Animal, Organism; also CognitiveAgent, SentientAgent
+Organization Agent                  # via Group (subclass Group Agent); also CognitiveAgent
+ComputerProgram Proposition         # via Procedure (a program is the abstract procedure, not a running thing)
+# Roots among the base terms: Agent (an Object), Process, Proposition (Abstract),
+# Text (a LinguisticExpression: Physical), TimeInterval (TimePosition: Abstract).
+# Event is not a SUMO class (SUMO's Process covers events); it is left unrelated.

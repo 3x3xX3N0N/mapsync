@@ -1,5 +1,6 @@
 {
   "sumo_terms_sha": "e48a94d0917dccd87c37f0daf1174b85dc302814837ca2bd2998587a37bb3b29",
+  "vocab_sha": "2bf2751d7a13c58ba32a95ddbb77f1e6b79707ffc9aa35f0c6f438790fe0fecf",
   "maps": [
     {
       "owner": "alice",
@@ -10,7 +11,12 @@
       "owner": "bob",
       "root": "2ea2aa8c1191e1d9c8e7960623187919e0c29f95191697265bcb65c2d8762af7",
       "sig_sha": "6b2c4b5ad8d56242d3bc9d67f60cbefe3c7634dd8828d0610d7cb82169479b21"
+    },
+    {
+      "owner": "carol",
+      "root": "18aabd5eb9a6c7d1933fae29eb5f2767e34663c69f97ebf3a225f8a2d857627a",
+      "sig_sha": "d6ec6245784a6faa28685d889eb1c7fafe7d53978763c1c7417e58245c5f45c9"
     }
   ],
-  "top_root": "5063e96c07099d44d4ea013eacaebc0b089ebf151c64ebc8e05178d7cf61f7fd"
+  "top_root": "258d5f37997883156dc469d3b35d23eea76b41e3974dd0e6bbdbe6ca7ccc6209"
 }

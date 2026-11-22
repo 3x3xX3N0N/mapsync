@@ -1,7 +1,7 @@
 """mapsynclib: the logic behind mapsync.py, split by concern.
 
     hashing   sha, leaf, merkle, map_root (the bytes that get signed)
-    vocab     the pinned SUMO term list; `concepts`
+    vocab     the pinned SUMO terms + hierarchy/local/disjoint; is_a, disjoint; `concepts`, `vocab`
     world     where things live under a base dir: owners, maps
     signing   ssh-keygen wrappers: owner root sigs, agent node sigs
     index     index.json (top_root) and `verify`

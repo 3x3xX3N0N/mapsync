@@ -1,0 +1,33 @@
+{
+  "owner": "carol",
+  "nodes": [
+    {
+      "id": "dispatch",
+      "label": "Switchboard",
+      "sumo": "RoutingAgent",
+      "content": "Carol's agent that hands each ticket to a coding agent",
+      "salt": "5b7c51bb97fde4d4fb5bf3db7d03f198"
+    },
+    {
+      "id": "builder",
+      "label": "Builder",
+      "sumo": "CodingAgent",
+      "content": "Carol's coding agent",
+      "salt": "03081152788b7c3782c49721023a1dfe"
+    },
+    {
+      "id": "ask",
+      "label": "Ask for review",
+      "sumo": "Requesting",
+      "content": "Ask a lead to look at a finished change",
+      "salt": "e0f45252896fc646666faedbd818120b"
+    },
+    {
+      "id": "plan",
+      "label": "Sprint plan",
+      "sumo": "Planning",
+      "content": "What gets built next week",
+      "salt": "41b588d34b9abe1c56cbe49a28a0879d"
+    }
+  ]
+}

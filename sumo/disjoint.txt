@@ -1,0 +1,12 @@
+# Disjoint classes: `A B` = nothing is both an A and a B. Inherited by every subclass.
+# From SUMO's top partitions: (partition Entity Physical Abstract), (partition Physical
+# Object Process). Agent and Text are Objects; Process is a Process; Proposition and
+# TimeInterval are Abstract.
+Agent Process
+Agent Proposition
+Agent TimeInterval
+Text Process
+Text Proposition
+Text TimeInterval
+Process Proposition
+Process TimeInterval

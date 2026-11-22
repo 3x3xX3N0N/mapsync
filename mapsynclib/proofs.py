@@ -2,8 +2,8 @@
 
 A proof carries the revealed node, the Merkle audit path from its leaf to the owner's map
 root (sibling hashes + which side they sit on), a second path for the map head (owner +
-vocabulary sha), the owner's root.sig, the pinned term list, and the path from the owner's
-index entry up to top_root. `check_proof` recomputes all of it from the proof alone: the
+vocabulary sha), the owner's root.sig, the pinned term list (plus the hierarchy files when
+the world has them), and the path from the owner's index entry up to top_root. `check_proof` recomputes all of it from the proof alone: the
 other nodes appear only as hashes, and their salts keep them unguessable.
 """
 from __future__ import annotations
@@ -12,10 +12,10 @@ import os
 import tempfile
 
 from .files import read_bytes, read_json
-from .hashing import OPTIONAL, climb, head, leaf, merkle_path, sha
+from .hashing import OPTIONAL, climb, head, head_fields, leaf, map_head, merkle_path, sha
 from .index import build_index, entry_hash, top_leaves
 from .signing import NAMESPACE, ssh_verify
-from .vocab import TERMS, load_terms
+from .vocab import TERMS, VOCAB_FILES, load_terms, parse_vocab, vocab_raws
 from .world import load
 
 FORMAT = "mapsync-proof/1"
@@ -28,15 +28,12 @@ def prove(base: str, owner: str, node_id: str) -> dict:
     if m["owner"] != owner:
         raise ValueError(f"maps/{owner}/map.json says owner {m['owner']!r}")
     terms_raw = read_bytes(os.path.join(base, TERMS))
-    terms, terms_sha = load_terms(base)
     nodes = sorted(m["nodes"], key=lambda n: n["id"])
     ids = [n["id"] for n in nodes]
     if node_id not in ids:
         raise KeyError(f"{owner} has no node {node_id!r} (has: {', '.join(ids)})")
-    for n in nodes:
-        if n["sumo"] not in terms:
-            raise ValueError(f"{owner}:{n['id']} tagged {n['sumo']!r}, not in the pinned terms")
-    leaves = [head(owner, terms_sha)] + [leaf(n) for n in nodes]
+    h = map_head(m, base, f"{owner}'s map")
+    leaves = [head(owner, h["sumo_terms_sha"], h.get("vocab_sha"))] + [leaf(n) for n in nodes]
     i = ids.index(node_id) + 1                    # leaf 0 is the head
     idx = build_index(base)
     stored = read_json(os.path.join(base, "index.json"))
@@ -44,13 +41,14 @@ def prove(base: str, owner: str, node_id: str) -> dict:
         raise ValueError("index.json does not match the maps; run `index` first")
     j = [e["owner"] for e in idx["maps"]].index(owner)
     top = top_leaves(idx)
-    return {
+    tail = 2 if "vocab_sha" in idx else 1
+    proof = {
         "format": FORMAT,
         "owner": owner,
         "node": nodes[i - 1],
         "leaf": leaves[i],
         "map": {
-            "head": {"owner": owner, "sumo_terms_sha": terms_sha},
+            "head": h,
             "head_hash": leaves[0],
             "leaf_count": len(leaves),
             "leaf_index": i,
@@ -65,10 +63,14 @@ def prove(base: str, owner: str, node_id: str) -> dict:
             "entry_index": j,
             "leaf_count": len(top),
             "path": merkle_path(top, j),
-            "terms_path": merkle_path(top, len(top) - 1),
+            "terms_path": merkle_path(top, len(top) - tail),
             "top_root": idx["top_root"],
         },
     }
+    if "vocab_sha" in idx:                        # hierarchy files, and their place under top_root
+        proof["vocab"] = {f: raw.decode() for f, raw in vocab_raws(base).items()}
+        proof["index"]["vocab_path"] = merkle_path(top, len(top) - 1)
+    return proof
 
 
 def _sig_ok(allowed_signers: str, owner: str, sig: str, root: str) -> bool:
@@ -92,12 +94,24 @@ def _check(p: dict, allowed_signers: str, top_root: str | None) -> str | None:
         return "revealed node does not hash to the claimed leaf"
     # 2. vocabulary and head: who owns this map, under which term list
     terms_sha = sha(p["sumo_terms"].encode())
-    if mp["head"] != {"owner": owner, "sumo_terms_sha": terms_sha}:
+    vocab = None
+    if "vocab" in p:                              # the world's hierarchy files: validated, hashed
+        if not isinstance(p["vocab"], dict) or not set(p["vocab"]) <= set(VOCAB_FILES):
+            return "vocab must map hierarchy file names to their text"
+        try:
+            vocab = parse_vocab(p["sumo_terms"], {f: t.encode() for f, t in p["vocab"].items()})
+        except ValueError as e:
+            return f"included vocabulary is invalid: {e}"
+    pinned = mp["head"].get("vocab_sha") if isinstance(mp["head"], dict) else None
+    if pinned is not None and (vocab is None or pinned != vocab.sha):
+        return "map head pins a vocab_sha that does not match the included hierarchy files"
+    if mp["head"] != head_fields(owner, terms_sha, pinned):
         return "map head does not match the claimed owner and the included term list"
     terms = {ln.strip() for ln in p["sumo_terms"].splitlines() if ln.strip() and not ln.startswith("#")}
     if node["sumo"] not in terms:
-        return f"node tagged {node['sumo']!r}, not in the pinned term list"
-    if head(owner, terms_sha) != mp["head_hash"]:
+        if pinned is None or not vocab.is_local(node["sumo"]):
+            return f"node tagged {node['sumo']!r}, not in the pinned term list (nor a pinned local term)"
+    if head(owner, terms_sha, pinned) != mp["head_hash"]:
         return "head hash does not match the head inputs"
     # 3. both audit paths climb to the same map root
     n, i = mp["leaf_count"], mp["leaf_index"]
@@ -123,14 +137,16 @@ def _check(p: dict, allowed_signers: str, top_root: str | None) -> str | None:
     if e != want:
         return "index entry does not match the owner, map root and signature"
     m, j = ix["leaf_count"], ix["entry_index"]
-    if not 0 <= j < m - 1:
-        return f"entry index {j} is not a map position (0..{m - 2})"
+    tail = 1 if vocab is None else 2              # terms sha (and vocab sha) after the entries
+    if not 0 <= j < m - tail:
+        return f"entry index {j} is not a map position (0..{m - tail - 1})"
     try:
-        t_entry = climb(entry_hash(e), ix["path"], j, m)
-        t_terms = climb(terms_sha, ix["terms_path"], m - 1, m)
+        tops = [climb(entry_hash(e), ix["path"], j, m), climb(terms_sha, ix["terms_path"], m - tail, m)]
+        if vocab is not None:
+            tops.append(climb(vocab.sha, ix["vocab_path"], m - 1, m))
     except ValueError as err:
         return f"index audit path: {err}"
-    if t_entry != ix["top_root"] or t_terms != ix["top_root"]:
+    if any(t != ix["top_root"] for t in tops):
         return "index audit paths do not reach top_root"
     if top_root is not None and ix["top_root"] != top_root:
         return f"top_root {ix['top_root'][:16]}… is not the expected {top_root[:16]}…"

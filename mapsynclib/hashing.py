@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from .files import read_json
-from .vocab import TERMS, load_terms
+from .vocab import TERMS, load_terms, load_vocab
 
 OPTIONAL = ("pubkey", "by", "same_as")
 # pubkey  : this node IS an agent; its own ssh public key. Identity = this key, not the label.
@@ -91,18 +91,48 @@ def climb(h: str, path: list[dict], i: int, n: int) -> str:
     return h
 
 
-def head(owner: str, terms_sha: str) -> str:
-    """The owner and the vocabulary version are part of what gets signed."""
-    return sha(json.dumps({"owner": owner, "sumo_terms_sha": terms_sha}, sort_keys=True).encode())
+def head_fields(owner: str, terms_sha: str, vocab_sha: str | None = None) -> dict:
+    """What the head commits to. vocab_sha only for a map that uses a local term."""
+    h = {"owner": owner, "sumo_terms_sha": terms_sha}
+    if vocab_sha is not None:
+        h["vocab_sha"] = vocab_sha
+    return h
+
+
+def head(owner: str, terms_sha: str, vocab_sha: str | None = None) -> str:
+    """The owner and the vocabulary version are part of what gets signed. A map tagged only
+    with base terms hashes {owner, sumo_terms_sha} exactly as before; one that uses a local
+    term (sumo/local.txt) also pins the whole hierarchy via vocab_sha."""
+    return sha(json.dumps(head_fields(owner, terms_sha, vocab_sha), sort_keys=True).encode())
+
+
+def map_head(m: dict, base: str, where: str = "map") -> dict:
+    """The head fields for map m under base's vocabulary. Raises ValueError on a node tagged
+    with a term that is neither a base term nor a valid local term."""
+    terms, terms_sha = load_terms(base)
+    extra = [n for n in m["nodes"] if n["sumo"] not in terms]
+    if not extra:
+        return head_fields(m["owner"], terms_sha)
+    try:
+        v = load_vocab(base)
+    except ValueError as e:
+        raise ValueError(f"{where}: uses local terms, but the vocabulary is invalid: {e}") from None
+    for n in extra:
+        if not v.is_local(n["sumo"]):
+            raise ValueError(f"{where}: node {n['id']!r} tagged {n['sumo']!r}, not in pinned {TERMS} "
+                             f"nor a local term in sumo/local.txt")
+    return head_fields(m["owner"], terms_sha, v.sha)
+
+
+def map_leaves(m: dict, base: str, where: str = "map") -> list[str]:
+    """[head hash] + node leaves sorted by id: the map tree's leaves."""
+    h = map_head(m, base, where)
+    nodes = sorted(m["nodes"], key=lambda n: n["id"])
+    return [head(h["owner"], h["sumo_terms_sha"], h.get("vocab_sha"))] + [leaf(n) for n in nodes]
 
 
 def map_root_of(m: dict, base: str, where: str = "map") -> str:
-    terms, terms_sha = load_terms(base)
-    for n in m["nodes"]:
-        if n["sumo"] not in terms:
-            raise ValueError(f"{where}: node {n['id']!r} tagged {n['sumo']!r}, not in pinned {TERMS}")
-    nodes = sorted(m["nodes"], key=lambda n: n["id"])
-    return merkle([head(m["owner"], terms_sha)] + [leaf(n) for n in nodes])
+    return merkle(map_leaves(m, base, where))
 
 
 def map_root(path: str, base: str) -> str:

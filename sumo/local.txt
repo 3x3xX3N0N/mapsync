@@ -1,0 +1,12 @@
+# Local subclasses on top of the base terms: `NewTerm Parent`.
+# One parent per term; the parent is a base term or a term declared here; no cycles;
+# a base term may not be redefined. Pinned with hierarchy.txt and disjoint.txt (vocab_sha).
+
+# from MILO/SUMO: mid-level SUMO terms not in terms.txt
+LinguisticCommunication Communication   # (subclass LinguisticCommunication Communication)
+Directing LinguisticCommunication       # (subclass Directing LinguisticCommunication)
+Requesting Directing                    # (subclass Requesting Directing)
+
+# local to mapsync: kinds of agent program (SUMO has no such distinction)
+CodingAgent ComputerProgram             # a program that writes and changes code
+RoutingAgent ComputerProgram            # a program that hands work to other agents

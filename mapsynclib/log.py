@@ -5,6 +5,8 @@ One canonical JSON object per line (sort_keys, separators (",",":")):
     {"seq": 0, "prev": <entry_sha of the previous line, or 64 zeros>, "top_root": hex,
      "maps": [{"owner", "root"}...], "sumo_terms_sha": hex, "recorded_at": "YYYY-MM-DDTHH:MM:SSZ"}
 
+plus "vocab_sha": hex when the index has one (the world has sumo/hierarchy.txt etc.).
+
 entry_sha(line) = sha256(0x02 || canonical line bytes). Each line commits to the whole
 history before it, so rewriting, dropping or reordering a past entry breaks every later
 `prev`. Two copies of a log agree on history iff one is a prefix of the other; anything
@@ -26,6 +28,7 @@ from .signing import sig_ok
 LOG = os.path.join("log", "roots.jsonl")
 ZERO = "0" * 64
 KEYS = {"seq", "prev", "top_root", "maps", "sumo_terms_sha", "recorded_at"}
+OPTIONAL_KEYS = {"vocab_sha"}
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
 
@@ -57,11 +60,11 @@ def read_lines(path: str) -> list[bytes]:
 
 
 def _check_entry(e, i: int) -> None:
-    if not isinstance(e, dict) or set(e) != KEYS:
-        raise LogError(f"line {i}: entry must have exactly the keys {sorted(KEYS)}")
+    if not isinstance(e, dict) or not KEYS <= set(e) <= KEYS | OPTIONAL_KEYS:
+        raise LogError(f"line {i}: entry must have exactly the keys {sorted(KEYS)} (+ optional {sorted(OPTIONAL_KEYS)})")
     if type(e["seq"]) is not int or e["seq"] != i:
         raise LogError(f"line {i}: seq is {e['seq']!r}, expected {i} (entry dropped, inserted or reordered)")
-    for k in ("prev", "top_root", "sumo_terms_sha"):
+    for k in ("prev", "top_root", "sumo_terms_sha", *sorted(OPTIONAL_KEYS & set(e))):
         if not isinstance(e[k], str) or not HEX64.match(e[k]):
             raise LogError(f"seq {i}: {k} is not 64 lowercase hex")
     if not isinstance(e["recorded_at"], str) or not STAMP.match(e["recorded_at"]):
@@ -97,15 +100,19 @@ def load_log(path: str) -> tuple[list[bytes], list[dict]]:
 
 
 def entry_for(idx: dict, seq: int, prev: str, now: float | None = None) -> dict:
-    return {"seq": seq, "prev": prev, "top_root": idx["top_root"],
-            "maps": [{"owner": m["owner"], "root": m["root"]} for m in idx["maps"]],
-            "sumo_terms_sha": idx["sumo_terms_sha"],
-            "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+    e = {"seq": seq, "prev": prev, "top_root": idx["top_root"],
+         "maps": [{"owner": m["owner"], "root": m["root"]} for m in idx["maps"]],
+         "sumo_terms_sha": idx["sumo_terms_sha"],
+         "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+    if "vocab_sha" in idx:
+        e["vocab_sha"] = idx["vocab_sha"]
+    return e
 
 
 def head_matches(head: dict, idx: dict) -> bool:
     """Does the log head record exactly this index state (top_root, roots, vocabulary)?"""
     return (head["top_root"] == idx.get("top_root") and head["sumo_terms_sha"] == idx.get("sumo_terms_sha")
+            and head.get("vocab_sha") == idx.get("vocab_sha")
             and head["maps"] == [{"owner": m.get("owner"), "root": m.get("root")} for m in idx.get("maps", [])])
 
 

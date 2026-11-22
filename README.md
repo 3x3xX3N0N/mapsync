@@ -35,7 +35,7 @@ Three layers, each solving one part:
 ```
                     top_root  ──► log/roots.jsonl ──► witnesses sign receipts (anchors/)
                    /    |    \
-         alice root   bob root   sumo-terms sha     ◄── index.json: signed roots only
+    alice · bob · carol roots   terms sha   vocab sha   ◄── index.json: signed roots only
           /  |  \       /  |  \
        nodes ...      nodes ...                     ◄── each person's own map.json
 ```
@@ -50,7 +50,8 @@ Three layers, each solving one part:
   merging silently.
 - **The vocabulary is pinned.** The hash of the allowed SUMO term list goes into every
   root. If someone swaps the dictionary, every root changes. Meanings can't drift
-  without anyone noticing.
+  without anyone noticing. A pinned subclass hierarchy with local subclasses and
+  disjointness axioms sits on top (see "Vocabulary").
 - **Privacy.** Each node has a random salt, so a published root reveals nothing, and
   short hidden content can't be guessed by hashing candidates.
 
@@ -103,19 +104,34 @@ Stdlib Python 3 plus `ssh-keygen` (for signatures). No dependencies.
 ```bash
 python3 mapsync.py verify     # every map signed by its owner, index matches a rebuild and is the log head
 python3 mapsync.py g1         # sabotage each check in a sandbox; every one must go red
-python3 mapsync.py concepts   # line the maps up by meaning, not by label
+python3 mapsync.py concepts   # line the maps up by meaning, not by label (a subclass tree)
+python3 mapsync.py vocab CodingAgent   # where a term sits: ancestors, subclasses, disjoint classes
 python3 mapsync.py names      # same name, different identity? (the two Codys)
 python3 mapsync.py diff maps/alice/map.json maps/bob/map.json
 ```
 
-`concepts` on the two example maps:
+`concepts` on the example maps (alice and bob use base SUMO terms only; carol uses
+local subclasses, marked `*`):
 
 ```
-ComputerProgram      alice:'Psyche', alice:'Cody', bob:'Cody', bob:'the router'
-IntentionalProcess   alice:'Review readiness', bob:'PR check'
-Text                 alice:'Release note', bob:'Changelog'
-TimeInterval         bob:'Ship date'
+Process                        -  [4 in all]
+  IntentionalProcess           alice:'Review readiness', bob:'PR check'  [4 in all]
+    Communication              -  [1 in all]
+      LinguisticCommunication* -  [1 in all]
+        Directing*             -  [1 in all]
+          Requesting*          carol:'Ask for review'
+    Planning                   carol:'Sprint plan'
+Proposition                    -  [6 in all]
+  ComputerProgram              alice:'Psyche', alice:'Cody', bob:'Cody', bob:'the router'  [6 in all]
+    CodingAgent*               carol:'Builder'
+    RoutingAgent*              carol:'Switchboard'
+Text                           alice:'Release note', bob:'Changelog'
+TimeInterval                   bob:'Ship date'
 ```
+
+Each used term sits under its ancestors from the pinned hierarchy, with the labels tagged
+with exactly that term; `[N in all]` counts the nodes at or below it. `concepts --flat`
+prints the old one-line-per-term output unchanged.
 
 `g1` exists because a check that can't fail proves nothing. Each row breaks one thing
 (a word of content, a SUMO tag, a salt, the owner name, swapped signatures, the pinned
@@ -124,6 +140,9 @@ term list, the index) and requires `verify` to go red. Further rows tamper with 
 `check-proof` to go red, and change one node in a copy of the world and require
 `sync-check` to name it. Log rows rewrite, drop and reorder past entries of the root log,
 and leave the index ahead of the log head. Key rows forge the key chain (see "Keys").
+Vocabulary rows edit `sumo/local.txt` under maps that use it, add a subclass cycle, an
+unknown parent, a redefined base term, and a class under two disjoint classes (see
+"Vocabulary").
 
 ### Add your own map
 
@@ -215,7 +234,7 @@ python3 mapsync.py log compare THEIR_roots.jsonl   # OK if one is a prefix of th
   its head) to catch a rewrite. A log that's been rewritten and re-chained is internally
   consistent, so only a comparison with an old copy can expose it.
 
-`g1` builds a two-entry history in its sandbox (alice alone, then alice and bob). It then
+`g1` builds a two-entry history in its sandbox (alice alone, then the current index). It then
 rewrites a past entry, drops one, reorders them, and leaves the index ahead of the log
 head, and `verify` has to go red for each.
 
@@ -360,6 +379,60 @@ recovery key (green), then: an owner rotation signed only by the new key, revoki
 old key while its signatures remain, a forged chain line, reordered chain lines, and
 `allowed_signers` disagreeing with the chain head. `verify` has to go red for each.
 
+### Vocabulary: a pinned SUMO hierarchy, local subclasses, disjointness
+
+`sumo/terms.txt` alone is flat and coarse: the coordinator and both Codys are all
+`ComputerProgram`. Three more pinned files sit on top of it. `terms.txt` itself is
+unchanged, since its sha is inside every shipped root.
+
+| file | lines | rules |
+|---|---|---|
+| `sumo/hierarchy.txt` | `Child Parent` | SUMO subclass edges among base terms, curated from SUMO (`Planning IntentionalProcess`, `ComputerProgram Proposition`, ...). Several parents allowed. |
+| `sumo/local.txt` | `NewTerm Parent` | local subclasses (`CodingAgent ComputerProgram`, `RoutingAgent ComputerProgram`) and a few SUMO mid-level terms marked `# from MILO/SUMO`. One parent each, base or local; must not redefine a base term. |
+| `sumo/disjoint.txt` | `A B` | nothing is both an A and a B, inherited by every subclass. From SUMO's top partitions (Object vs Process vs Abstract). |
+
+`#` starts a comment. The three files are validated together. A subclass cycle, an unknown
+term or parent, a duplicate line, a redefined base term, or a class that ends up under two
+disjoint classes makes `vocab` and `verify` go red. `mapsynclib.vocab` exposes
+`load_vocab(base)` plus `ancestors(term)`, `is_a(a, b)` and `disjoint(a, b)`, all
+respecting inheritance (the disjointness checks in later cards use these).
+
+**Pinning stays backward compatible.** `vocab_sha` is sha256 over
+`mapsync-vocab/1\n` followed by each of hierarchy, local and disjoint as
+`<name>.txt <len>\n<bytes>` (a missing file counts as 0 bytes).
+
+- A map whose nodes all use base terms hashes its head as `{owner, sumo_terms_sha}`, exactly
+  as before. alice's and bob's roots (`656b6e9d…`, `2ea2aa8c…`) and signatures are unchanged,
+  and editing the hierarchy files doesn't touch them.
+- A map that tags any node with a local term adds `vocab_sha` to its head. Its owner then
+  signs the whole hierarchy, so any edit to those files, even a comment, changes that map's
+  root and turns `verify` red until the owner re-signs. A tag that is neither a base term nor
+  a valid local term is red as before.
+- The index commits to `vocab_sha` whenever the files exist: it's an extra key in
+  `index.json`, an extra leaf of the top tree after the terms sha, and a `vocab_sha` field
+  in new log entries. `sync-check` reports `! vocabulary hierarchy differs`. Inclusion proofs
+  carry the hierarchy files and their audit path, so a node tagged `CodingAgent` proves
+  on its own.
+
+```bash
+python3 mapsync.py vocab                     # validate; counts and vocab_sha
+python3 mapsync.py vocab CodingAgent         # is a: ComputerProgram -> Proposition; disjoint with ...
+python3 mapsync.py concepts                  # tree; --flat for the old output
+python3 mapsync.py demo /tmp/w --local-terms # Codys tagged CodingAgent, routers RoutingAgent
+```
+
+**Shipped example:** `carol` is a third owner whose map uses local terms (`RoutingAgent`,
+`CodingAgent`, `Requesting`) plus base `Planning`, so her root pins `vocab_sha`. Her map was
+signed with a throwaway key generated in `/tmp`. Only the public key is in `allowed_signers`;
+the private key was deleted right after signing and never entered the repo, so nobody can
+re-sign carol's map. Adding carol and the hierarchy moved the top root to `258d5f37…`, which
+is log seq 1. The demo receipt still covers seq 0 (`5063e96c…`, alice and bob only), and
+seq 1 isn't witnessed yet (a note, not red).
+
+The hierarchy is still curated by hand. The edges are a small, deliberately chosen part
+of SUMO (intermediate classes are collapsed and named in comments), not SUMO's full
+axioms.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -376,14 +449,11 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab`, `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
+`vocab` (terms, hierarchy, concepts), `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)
 
-- **SUMO's upper terms are coarse.** `concepts` above lumps the coordinator and both
-  Codys together as `ComputerProgram`. Real use needs SUMO's mid-level and
-  domain terms (MILO and others), or local subclasses declared on top of SUMO.
 - **Tagging is work.** Nobody will hand-pick from tens of thousands of terms. The
   realistic path is a suggester (WordNet→SUMO mappings, or an LLM) proposing a tag and a
   human confirming it.

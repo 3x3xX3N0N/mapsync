@@ -8,7 +8,7 @@ from .files import read_bytes, read_json, write_json
 from .hashing import map_root, merkle, sha
 from .identity import identity_checks
 from .signing import sig_ok
-from .vocab import load_terms
+from .vocab import load_terms, load_vocab
 from .world import map_path, owners
 
 
@@ -18,12 +18,15 @@ def entry_hash(e: dict) -> str:
 
 
 def top_leaves(idx: dict) -> list[str]:
-    """The top tree's leaves: one per map entry (sorted by owner), then the terms sha."""
-    return [entry_hash(e) for e in idx["maps"]] + [idx["sumo_terms_sha"]]
+    """The top tree's leaves: one per map entry (sorted by owner), then the terms sha, then
+    the vocab sha (hierarchy + local + disjoint) if the world has those files."""
+    return ([entry_hash(e) for e in idx["maps"]] + [idx["sumo_terms_sha"]]
+            + ([idx["vocab_sha"]] if "vocab_sha" in idx else []))
 
 
 def build_index(base: str) -> dict:
     _, terms_sha = load_terms(base)
+    vocab = load_vocab(base)                      # validates the hierarchy: invalid = ValueError
     entries = []
     for o in owners(base):
         root = map_root(map_path(base, o), base)
@@ -33,8 +36,12 @@ def build_index(base: str) -> dict:
         if os.path.exists(kp):                    # only when present: old worlds hash as before
             e["keys_sha"] = sha(read_bytes(kp))
         entries.append(e)
-    top = merkle(top_leaves({"maps": entries, "sumo_terms_sha": terms_sha}))
-    return {"sumo_terms_sha": terms_sha, "maps": entries, "top_root": top}
+    idx = {"sumo_terms_sha": terms_sha}
+    if vocab.present:                             # only when the files exist: old worlds hash as before
+        idx["vocab_sha"] = vocab.sha
+    idx["maps"] = entries
+    idx["top_root"] = merkle(top_leaves(idx))
+    return idx
 
 
 def write_index(base: str) -> dict:

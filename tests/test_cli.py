@@ -59,7 +59,7 @@ class CLI_(unittest.TestCase):
     def test_shipped_commands(self):
         self.assertEqual(run("root", "maps/alice/map.json", cwd=REPO).stdout.strip(), SHIPPED_ROOTS["alice"])
         self.assertIn("COLLISION", run("names").stdout)
-        self.assertIn("IntentionalProcess   alice:'Review readiness', bob:'PR check'", run("concepts").stdout)
+        self.assertIn("IntentionalProcess   alice:'Review readiness', bob:'PR check'", run("concepts", "--flat").stdout)
         d = run("diff", "maps/alice/map.json", "maps/bob/map.json", cwd=REPO).stdout
         self.assertIn("+ changelog  only in maps/bob/map.json", d)
         self.assertIn("~ cody  differs", d)

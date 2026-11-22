@@ -25,8 +25,14 @@ def append_text(p: str, s: str) -> None:
 
 
 def read_json(p: str):
+    """json.load, but a parse error names the file (still a json.JSONDecodeError / ValueError)."""
     with open(p, encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(f"{p}: invalid JSON: {e.msg}", e.doc, e.pos) from None
+        except UnicodeDecodeError as e:
+            raise ValueError(f"{p}: not UTF-8 text ({e.reason} at byte {e.start})") from None
 
 
 def write_json(p: str, obj, **kw) -> None:

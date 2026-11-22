@@ -21,7 +21,13 @@ from . import REPO
 from .vocab import HIERARCHY, LOCAL, TERMS, VOCAB_FILES, load_vocab
 from .world import load, save
 from .claims import CONTRADICTION, gather as gather_claims
-from .suggest import LEXICON
+from .suggest import LEXICON, tag
+from .anchor import NAMESPACE as ANCHOR_NAMESPACE, anchor_checks
+from .files import read_text, write_bytes
+from .hashing import leaf
+from .log import compare as compare_logs
+from .signing import AGENT_NAMESPACE, NAMESPACE as OWNER_NAMESPACE, agent_sign, sign, ssh_sign
+from .world import map_path
 
 
 def sandbox(base: str, d: str | None = None) -> str:
@@ -419,52 +425,266 @@ def run_row(base: str, sabotage, check) -> bool:
         shutil.rmtree(d)
 
 
-def g1(base: str) -> bool:
-    all_ok = True
-    for name, sabotage, want in VERIFY_ROWS:
-        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
+# ------------------------------------------------ cross-key forgery and namespace confusion
+
+def _fresh(d: str) -> dict:
+    """Fixture: replace the sandbox's world with a freshly keyed demo world (make_world; keys
+    in d/forgeworld/keys, never in a repo). Same vocabulary as the sandbox. No log/anchors/keys.jsonl.
+    Returns the make_world dict (owners, agents, pubkeys)."""
+    for x in ("maps", "log", ANCHORS):
+        shutil.rmtree(os.path.join(d, x), ignore_errors=True)
+    for x in ("index.json", "allowed_signers", WITNESSES):
+        if os.path.exists(os.path.join(d, x)):
+            os.remove(os.path.join(d, x))
+    kw = os.path.join(d, "forgeworld")
+    w = make_world(kw, terms_from=d)
+    shutil.copytree(os.path.join(kw, "maps"), os.path.join(d, "maps"))
+    for x in ("allowed_signers", "index.json"):
+        shutil.copy(os.path.join(kw, x), d)
+    return w
+
+
+def _root_sig(d: str, owner: str, key: str, namespace: str) -> None:
+    """Write maps/<owner>/root.sig = a signature over the owner's current root by `key` in
+    `namespace`, then rebuild the index so only the signature itself can be wrong."""
+    root = map_path_root(d, owner)
+    write_bytes(os.path.join(d, "maps", owner, "root.sig"), ssh_sign(key, root, namespace))
+    write_index(d)
+
+
+def map_path_root(d: str, owner: str) -> str:
+    from .hashing import map_root
+    return map_root(map_path(d, owner), d)
+
+
+def _cross_agent(d):
+    w = _fresh(d)                                   # bob:changelog is by bob's Cody
+    agent_sign(map_path(d, "bob"), "changelog", w["agents"]["alice:cody"], quiet=True)
+
+
+def _cross_owner(d):
+    w = _fresh(d)
+    sign(map_path(d, "alice"), w["owners"]["bob"], d, quiet=True)
+    write_index(d)
+
+
+def _agent_as_owner(d):
+    w = _fresh(d)                                   # the agent's key, the agent's namespace
+    _root_sig(d, "alice", w["agents"]["alice:cody"], AGENT_NAMESPACE)
+
+
+def _owner_wrong_ns(d):
+    w = _fresh(d)                                   # right key, right bytes, wrong namespace only
+    _root_sig(d, "alice", w["owners"]["alice"], AGENT_NAMESPACE)
+
+
+def _agent_sig_owner_ns(d):
+    w = _fresh(d)                                   # Cody's key over its own node, owner namespace
+    node = next(n for n in load(d, "alice")["nodes"] if n["id"] == "review")
+    write_bytes(_sig(d, "alice", "review"), ssh_sign(w["agents"]["alice:cody"], leaf(node), OWNER_NAMESPACE))
+
+
+def _owner_witness(namespace: str):
+    """Fixture: a fresh world whose log head is witnessed by "alice" -- alice's OWNER key listed
+    in `witnesses` -- with the receipt signed in `namespace`. With mapsync-anchor that is a
+    legitimate receipt (green control); with mapsync it is an owner signature passed off as a
+    receipt (namespace confusion: red)."""
+    def go(d):
+        w = _fresh(d)
+        from .log import append as log_append
+        log_append(d)
+        with open(os.path.join(d, WITNESSES), "w") as f:
+            f.write(f"alice {w['pubkeys']['alice']}\n")
+        anchor(d, "alice", w["owners"]["alice"], now=1_700_100_000)
+        if namespace != ANCHOR_NAMESPACE:
+            p, r = _receipt(d, seq=0, witness="alice")
+            r["sig"] = ssh_sign(w["owners"]["alice"], statement(r).decode(), namespace).decode()
+            write_json(p, r, indent=2, sort_keys=True)
+    return go
+
+
+def _key_event_owner_ns(d):
+    """A rotation of alice's Cody exactly as `keys rotate` writes it (event, node pubkey updated,
+    map re-signed by the owner) except that its signatures are made in the owner namespace
+    (mapsync) instead of mapsync-keys. `rotate` itself would refuse it, so it is written raw."""
+    w = _fresh(d)
+    _, pub = fresh_key(os.path.join(d, "forgeworld"), "alice_cody2")
+    saved = keychain.NAMESPACE
+    keychain.NAMESPACE = OWNER_NAMESPACE             # event() reads the module constant at call time
+    try:
+        e = keychain.event([], "rotate", "agent:cody", w["pubkeys"]["alice:cody"], pub, "rotate",
+                           {"owner": w["owners"]["alice"], "old": w["agents"]["alice:cody"]},
+                           now=1_700_000_000)
+    finally:
+        keychain.NAMESPACE = saved
+    keychain.write_lines(d, "alice", [keychain.canonical(e)])
+    edit_map("alice", lambda m: next(n for n in m["nodes"] if n["id"] == "cody").update(pubkey=pub))(d)
+    sign(map_path(d, "alice"), w["owners"]["alice"], d, quiet=True)
+    write_index(d)
+
+
+def _key_event_right_ns(d):
+    """Control for the row above: the same rotation through `keys rotate` (mapsync-keys)."""
+    w = _fresh(d)
+    _, pub = fresh_key(os.path.join(d, "forgeworld"), "alice_cody2")
+    keychain.rotate(d, "alice", "agent:cody", pub, [w["owners"]["alice"], w["agents"]["alice:cody"]],
+                    now=1_700_000_000)
+    write_index(d)
+
+
+# (name, sabotage(dir), verify should be green?) -- on a freshly keyed world (make_world)
+FORGERY_ROWS = [
+    ("forgery: fresh-key world stays green", _fresh, True),
+    ("Alice's Cody signs Bob's node (cross-key forgery)", _cross_agent, False),
+    ("Bob's owner key signs Alice's root", _cross_owner, False),
+    ("an agent signs as the owner (namespace confusion: mapsync-agent sig used as root.sig)",
+     _agent_as_owner, False),
+    ("owner's own key signs her root in mapsync-agent (namespace only)", _owner_wrong_ns, False),
+    ("agent signs its node in the owner namespace (mapsync)", _agent_sig_owner_ns, False),
+    ("keys: the same rotation in mapsync-keys: green", _key_event_right_ns, True),
+    ("key-chain event signed in the owner namespace", _key_event_owner_ns, False),
+    ("anchor: owner key as listed witness, mapsync-anchor: green", _owner_witness(ANCHOR_NAMESPACE), True),
+    ("an owner sig reused as an anchor receipt sig (namespace confusion)", _owner_witness(OWNER_NAMESPACE), False),
+]
+
+NAMESPACES = {"owner root": OWNER_NAMESPACE, "agent node": AGENT_NAMESPACE,
+              "key chain": keychain.NAMESPACE, "anchor receipt": ANCHOR_NAMESPACE}
+
+
+def namespaces_distinct() -> bool:
+    return (sorted(NAMESPACES.values()) == ["mapsync", "mapsync-agent", "mapsync-anchor", "mapsync-keys"]
+            and len(set(NAMESPACES.values())) == len(NAMESPACES))
+
+
+# ------------------------------------------------ audit rows for checks of C2-C7 not yet covered
+
+def _fork_copy(prefix_only: bool):
+    """`log compare` against a copy of the two-entry history: its first line only (a prefix:
+    consistent), or with seq 0 rewritten and re-chained (a FORK at seq 0)."""
+    def check(d):
+        _with_history(d)
+        lines = read_lines(log_path(d))
+        other = lines[:1] if prefix_only else _rechain(lines)
+        op = os.path.join(d, "other-roots.jsonl")
+        with open(op, "wb") as f:
+            f.write(b"".join(x + b"\n" for x in other))
+        return compare_logs(log_path(d), op)[0]
+    return check
+
+
+def _witnesses_at_least(k: int):
+    def check(d):
+        _witnessed(d)
+        return anchor_checks(d, lambda *a: None, k)
+    return check
+
+
+def _lexicon_weight_zero(d):
+    append_text(os.path.join(d, LEXICON), "gizmo ComputerProgram 0\n")
+
+
+def _lexicon_duplicate(d):
+    append_text(os.path.join(d, LEXICON), "gizmo ComputerProgram\ngizmo ComputerProgram\n")
+
+
+def _tag_yes(d):
+    tag(d, "bob", "deadline", "Proposition", yes=True)
+
+
+def _proof_top_root(want_top):
+    def check(d):
+        p = prove(d, "alice", "review")
+        top = read_json(os.path.join(d, "index.json"))["top_root"] if want_top else "0" * 64
+        return check_proof(p, os.path.join(d, "allowed_signers"), top)[0]
+    return check
+
+
+def _remove_signer(d):
+    lines = [x for x in read_text(os.path.join(d, "allowed_signers")).splitlines() if not x.startswith("alice ")]
+    write_bytes(os.path.join(d, "allowed_signers"), ("\n".join(lines) + "\n").encode())
+
+
+def _verify(d):
+    return verify(d, quiet=True)
+
+
+# (name, check(dir) -> bool after the sabotage, want)
+AUDIT_ROWS = [
+    ("log compare: a prefix copy is consistent", _fork_copy(True), True),
+    ("log compare: a re-chained copy reports FORK", _fork_copy(False), False),
+    ("anchor verify --min-witnesses 2 with 2: green", _witnesses_at_least(2), True),
+    ("anchor verify --min-witnesses 3 with 2 witnesses", _witnesses_at_least(3), False),
+    ("lexicon entry with weight 0", lambda d: (_lexicon_weight_zero(d), _verify(d))[1], False),
+    ("lexicon lists the same (word, term) twice", lambda d: (_lexicon_duplicate(d), _verify(d))[1], False),
+    ("`tag --yes` retags without re-signing", lambda d: (_tag_yes(d), _verify(d))[1], False),
+    ("check-proof --top-root = the real top_root: green", _proof_top_root(True), True),
+    ("check-proof --top-root = some other top_root", _proof_top_root(False), False),
+    ("check-proof with alice missing from allowed_signers",
+     lambda d: (_remove_signer(d), proof_valid(d, lambda p: None))[1], False),
+    ("drop alice from allowed_signers (verify)", lambda d: (_remove_signer(d), _verify(d))[1], False),
+]
+
+
+# ------------------------------------------------ the table and the runner
+
+GREEN, SHOWN, CONSISTENT = ("green", "red"), ("shown", "not shown"), ("consistent", "FORK/red")
+
+
+def rows() -> list[tuple[str, str, object, bool, tuple[str, str]]]:
+    """Every g1 row: (group, name, run(base) -> got, want, (word if got, word if not))."""
+    out = []
+    def verify_rows(group, table):
+        for name, sab, want in table:
+            out.append((group, name, lambda b, s=sab: run_row(b, s, _verify), want, GREEN))
+    verify_rows("verify", VERIFY_ROWS)
+    verify_rows("log", LOG_ROWS)
+    verify_rows("anchor", ANCHOR_ROWS)
+    verify_rows("keys", KEY_ROWS)
+    verify_rows("vocab", VOCAB_ROWS)
+    verify_rows("forgery", FORGERY_ROWS)
+    out.append(("forgery", "namespaces mapsync/-agent/-keys/-anchor distinct", lambda b: namespaces_distinct(),
+                True, ("distinct", "NOT distinct")))
+    for name, sab, want in NAMES_ROWS:
+        out.append(("names", name, lambda b, s=sab: run_row(b, s, cody_collision), want,
+                    ("collision shown", "collision not shown")))
+    for name, sab, want in CLAIMS_ROWS:
+        out.append(("claims", name, lambda b, s=sab: run_row(b, s, contradiction_shown), want,
+                    ("CONTRADICTION shown", "CONTRADICTION not shown")))
+    for name, sab, want in PROOF_ROWS:
+        out.append(("proof", name, lambda b, s=sab: run_row(b, lambda d: None, lambda d: proof_valid(d, s)),
+                    want, GREEN))
+    for name, sab, want in SYNC_ROWS:
+        out.append(("sync", name, lambda b, s=sab: sync_finds(b, s), want, GREEN))
+    for name, check, want in AUDIT_ROWS:
+        out.append(("audit", name, lambda b, c=check: run_row(b, lambda d: None, c), want, GREEN))
+    return out
+
+
+def list_rows() -> None:
+    table = rows()
+    for group, name, _, want, words in table:
+        print(f"{group:8} {name}  (expect {words[0] if want else words[1]})")
+    print(f"{len(table)} rows")
+
+
+def g1(base: str, list_only: bool = False) -> bool:
+    if list_only:
+        list_rows()
+        return True
+    table = rows()
+    bad = 0
+    for group, name, run, want, words in table:
+        try:
+            got = bool(run(base))
+        except Exception as e:                       # a crash is a failed row, not a traceback
+            print(f"BAD  {name:48} -> crashed: {type(e).__name__}: {e}")
+            bad += 1
+            continue
         good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in LOG_ROWS:
-        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in ANCHOR_ROWS:
-        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in KEY_ROWS:
-        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in VOCAB_ROWS:
-        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in NAMES_ROWS:
-        got = run_row(base, sabotage, cody_collision)
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> collision {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
-    for name, sabotage, want in CLAIMS_ROWS:
-        got = run_row(base, sabotage, contradiction_shown)
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> CONTRADICTION {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
-    for name, sabotage, want in PROOF_ROWS:
-        got = run_row(base, lambda d: None, lambda d: proof_valid(d, sabotage))
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    for name, sabotage, want in SYNC_ROWS:
-        got = sync_finds(base, sabotage)
-        good = got == want
-        all_ok &= good
-        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
-    print("G1: every sabotage went red, baseline green" if all_ok else "G1 FAILED: a check cannot go red")
-    return all_ok
+        bad += not good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {words[0] if got else words[1]} "
+              f"(expected {words[0] if want else words[1]})")
+    reds = sum(1 for r in table if not r[3])
+    print(f"G1: {len(table)} rows ({reds} sabotages, {len(table) - reds} green controls), "
+          + ("every sabotage went red, baseline green" if not bad else f"{bad} FAILED: a check cannot go red"))
+    return not bad

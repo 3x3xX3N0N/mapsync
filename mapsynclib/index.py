@@ -56,13 +56,40 @@ def write_index(base: str) -> dict:
     return idx
 
 
+# What a malformed world can raise while being checked: reported as RED, never a traceback.
+MALFORMED = (ValueError, OSError, KeyError, TypeError, AttributeError, IndexError)
+
+
+def reason(e: BaseException) -> str:
+    """A one-line reason for a malformed-input error."""
+    if isinstance(e, FileNotFoundError):
+        return f"missing file {e.filename}"
+    if isinstance(e, KeyError):
+        return f"missing field {e.args[0]!r}" if e.args else "missing field"
+    if isinstance(e, (TypeError, AttributeError, IndexError)):
+        return f"malformed input ({type(e).__name__}: {e})"
+    return str(e)
+
+
 def verify(base: str, quiet: bool = False) -> bool:
+    """Check everything; True if green. Malformed input (missing files, invalid JSON, missing
+    fields, wrong types) is reported as RED with a reason, never raised."""
     say = (lambda *a: None) if quiet else print
+    try:
+        return _verify(base, say)
+    except MALFORMED as e:
+        say(f"RED  {reason(e)}")
+        say("RED")
+        return False
+
+
+def _verify(base: str, say) -> bool:
     ok = True
     try:
         fresh = build_index(base)
-    except (ValueError, FileNotFoundError, KeyError) as e:
-        say(f"RED  {e}")
+    except MALFORMED as e:
+        say(f"RED  {reason(e)}")
+        say("RED")
         return False
     for e in fresh["maps"]:
         good = sig_ok(base, e["owner"], e["root"])
@@ -71,9 +98,16 @@ def verify(base: str, quiet: bool = False) -> bool:
     ok &= identity_checks(base, say)
     from .keys import key_checks
     ok &= key_checks(base, say)                   # no keys.jsonl anywhere: a note, green
-    stored = read_json(os.path.join(base, "index.json"))
+    ip = os.path.join(base, "index.json")
+    try:
+        stored = read_json(ip)
+        if not isinstance(stored, dict):
+            raise ValueError(f"{ip}: must be a JSON object")
+    except MALFORMED as e:
+        say(f"RED  index.json: {reason(e)}")
+        stored = {}
     same = stored == fresh
-    say(f"{'ok ' if same else 'RED'}  index.json top_root {stored.get('top_root', '?')[:16]}… "
+    say(f"{'ok ' if same else 'RED'}  index.json top_root {str(stored.get('top_root', '?'))[:16]}… "
         f"{'matches' if same else 'does NOT match'} a rebuild from the maps")
     ok &= same
     from .log import log_checks                   # log imports index; import late

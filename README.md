@@ -112,6 +112,51 @@ python3 mapsync.py claims     # same_as clusters side by side: AGREE / REFINES /
 python3 mapsync.py diff maps/alice/map.json maps/bob/map.json
 ```
 
+Every command, in one place (each section below explains its part). All of them take the
+global `--base DIR` (default: this repo):
+
+```bash
+# maps and signatures
+python3 mapsync.py root MAP                       # a map's Merkle root
+python3 mapsync.py sign MAP KEY                   # owner signs the root -> root.sig
+python3 mapsync.py agent-sign MAP NODE AGENTKEY   # the agent itself signs a node it wrote
+python3 mapsync.py index                          # rebuild index.json (top_root)
+python3 mapsync.py verify                         # check everything; exit 0 if green
+python3 mapsync.py diff A.json B.json             # which nodes differ between two maps
+# identity and meaning
+python3 mapsync.py names                          # same label, different key? (two Codys)
+python3 mapsync.py concepts [--flat]              # maps lined up by SUMO term, as a subclass tree
+python3 mapsync.py vocab [TERM]                   # validate the pinned hierarchy / place one term
+python3 mapsync.py suggest TEXT...                # top-5 SUMO terms for TEXT (offline lexicon)
+python3 mapsync.py suggest --map MAP              # each node's tag vs the top suggestion
+python3 mapsync.py tag MAP NODE TERM [--yes]      # retag a node (only with --yes; never signs)
+python3 mapsync.py claims [--json] [--redact] [--strict]   # AGREE / REFINES / CONTRADICTION
+# proofs and sync
+python3 mapsync.py prove OWNER NODE [-o FILE]     # inclusion proof revealing just that node
+python3 mapsync.py check-proof FILE [--signers F] [--top-root H]   # check a proof on its own
+python3 mapsync.py sync-check OTHER [SECOND]      # same top root? else walk down to owner, node
+# history and witnesses
+python3 mapsync.py log append | log show | log verify   # the hash-chained log of top roots
+python3 mapsync.py log compare OTHER_LOG          # prefix = consistent; else FORK at seq N
+python3 mapsync.py anchor WITNESS KEY [--seq N]   # a witness signs a receipt for a log entry
+python3 mapsync.py anchor verify [--min-witnesses K]   # receipts valid; head has >= K witnesses
+python3 mapsync.py anchor export DIR              # a participant's own copy of log + receipts
+# keys
+python3 mapsync.py keys show OWNER                # key chain and lineages
+python3 mapsync.py keys recovery OWNER OWNER_KEY RECOVERY_PUB [--sign OLD_RECOVERY_KEY]
+python3 mapsync.py keys rotate OWNER owner|agent:ID NEW_PUB --sign KEY [--sign KEY]
+python3 mapsync.py keys revoke OWNER owner|agent:ID KEY --by owner|recovery --signer KEY
+python3 mapsync.py keys verify                    # every key chain intact; exit 0 if green
+# checking the checks
+python3 mapsync.py g1 [--list]                    # run (or just list) every sabotage row
+python3 mapsync.py demo DIR [--local-terms]       # a fresh signed world with throwaway keys
+python3 -m unittest discover tests                # the test suite, incl. tests/test_e2e.py
+```
+
+`verify` never stops on a traceback: a missing file, invalid JSON, a map that isn't an
+object, a node missing a field or carrying the wrong type all come out as `RED` with the
+reason (file and field), and exit 1.
+
 `concepts` on the example maps (alice and bob use base SUMO terms only; carol uses
 local subclasses, marked `*`):
 
@@ -147,6 +192,21 @@ unknown parent, a redefined base term, and a class under two disjoint classes (s
 "Vocabulary"). Lexicon rows edit `sumo/lexicon.txt` or point a word at an unknown term,
 and a claims row retags a linked pair with disjoint terms and requires `claims` to show
 `CONTRADICTION` (see "Suggesting tags" and "Claims").
+
+Forgery rows build a world with fresh throwaway keys (`demo.make_world`, in the sandbox,
+deleted afterwards) so they can really sign the wrong thing: Alice's Cody signs Bob's node,
+Bob's owner key signs Alice's root, an agent's `mapsync-agent` signature is put in as a
+`root.sig`, an owner's signature is passed off as an anchor receipt, a key-chain event is
+signed in the owner namespace. Each goes red. The four signing namespaces (`mapsync`
+for owner roots, `mapsync-agent` for nodes, `mapsync-keys` for key events,
+`mapsync-anchor` for receipts) are distinct, and the green controls next to the namespace
+rows show it is the namespace alone that turns them red: the same key over the same
+bytes, in the right namespace, passes. Audit rows cover the rest (`log compare` on a
+forked copy, `anchor verify --min-witnesses` above what was signed, a lexicon weight of 0
+or a duplicate entry, `tag --yes` without re-signing, `check-proof --top-root`, a missing
+signer). `g1` ends with a summary line, e.g. `G1: 72 rows (55 sabotages, 17 green
+controls), every sabotage went red, baseline green`; `g1 --list` prints the rows without
+running them.
 
 ### Add your own map
 
@@ -551,25 +611,49 @@ Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashi
 `vocab` (terms, hierarchy, concepts), `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `suggest`, `claims`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
-## Open problems (not solved here)
+## What's solved / what's still open
 
-- **Suggestions are only as good as a small lexicon.** `suggest` (see "Suggesting tags")
-  is a hand-curated word list, not WordNet's full mapping or a language model. It misses
-  synonyms it doesn't list, and a human still has to confirm every tag.
-- **Contradiction checks are shallow.** `claims` (see "Claims") catches only tags declared
-  disjoint in the pinned hierarchy. A real reasoner over SUMO's axioms (e.g. Sigma) would
-  find much more. It also can't see disagreement in free-text content.
-- **Key compromise is bounded, not solved.** Rotation, revocation and recovery exist (see
-  "Keys"), but a thief holding both the owner and recovery keys wins, there's no trusted
-  time, and revoking a key reddens its honest past signatures too.
-- **Cross-key forgery isn't in `g1`.** The sandbox has no private keys, so "Alice's Cody
-  signs Bob's node" was checked by hand (it goes red), not automatically.
-- **Witnesses are local, not public.** Anchoring (see "Anchoring") has witnesses sign
-  receipts locally. No public timestamp or transparency log is involved, by operator
-  decision. A rewrite that also deletes the receipts shows up only against a witness's
-  exported copy, and nobody is forced to keep one.
-- **The log can be withheld.** Whoever keeps `log/roots.jsonl` can still skip publishing an
-  entry. Witnesses can only sign what they're shown.
+**Solved here** (each with a `g1` row that turns it red):
+
+- **Is this map unaltered, and whose is it?** Merkle roots signed by the owner; the
+  owner's name and the pinned vocabulary are inside the signed bytes.
+- **Two Codys.** Identity is a key, not a label. Agents sign their own nodes; a node
+  signed by the wrong agent, by another owner, or in the wrong namespace is red.
+- **Same thing, different words.** SUMO tags line maps up by kind; only a signed
+  `same_as` says two nodes are the same thing. `claims` shows linked nodes side by side.
+- **Are we in sync?** One comparison of top roots, then a walk down to owner and node.
+- **Show one node, hide the rest.** Inclusion proofs check on their own.
+- **History.** An append-only, hash-chained log of top roots; dropping, reordering or
+  rewriting entries is red, and `log compare` names the seq where two copies fork.
+- **"This was our map at time X", locally.** Witnesses sign receipts for log entries; a
+  rewrite after the fact leaves receipts pointing at something no longer there.
+- **Lost or stolen keys, bounded.** Rotation, revocation and a pre-registered recovery
+  key, with one stable lineage per identity.
+- **Meaning drift.** The term list, hierarchy, local subclasses, disjointness axioms and
+  the suggester's lexicon are all pinned under `top_root`.
+
+**Still open** (not solved here, some by design):
+
+- **No public anchoring, by design.** Witnesses are local keys signing local receipt
+  files; no public timestamp service, transparency log or blockchain is involved. A
+  rewrite that also deletes every receipt shows up only against a witness's exported
+  copy, and nobody is forced to keep one.
+- **Witnesses' clocks are trusted.** `witnessed_at` is whatever the witness's clock said.
+  Receipts order entries only as far as you trust the witnesses not to lie about time,
+  and colluding witnesses can backdate together.
+- **The collector can withhold.** Whoever keeps `log/roots.jsonl` and `index.json` can
+  skip publishing an entry, or leave a map out. Witnesses can only sign what they're
+  shown; absence isn't detectable without an outside expectation of what should be there.
+- **No full SUMO reasoner.** `claims` catches only tags declared disjoint in a small
+  pinned hierarchy. A reasoner over SUMO's axioms (e.g. Sigma) would find much more, and
+  nothing here sees disagreement in free-text content.
+- **Suggestions are only as good as a small lexicon.** `suggest` is a hand-curated word
+  list, not WordNet's full mapping or a language model. A human confirms every tag.
+- **Key compromise is bounded, not solved.** A thief holding both the owner and the
+  recovery key wins; there's no trusted time to say a signature predates a compromise,
+  so revoking a key reddens its honest past signatures too.
+- **Agreement isn't truth.** Two signed, linked, in-sync maps can both be wrong. mapsync
+  proves who claimed what and when they agreed, not that the claim is right.
 
 ## Lineage
 

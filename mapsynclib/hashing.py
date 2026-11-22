@@ -106,9 +106,43 @@ def head(owner: str, terms_sha: str, vocab_sha: str | None = None) -> str:
     return sha(json.dumps(head_fields(owner, terms_sha, vocab_sha), sort_keys=True).encode())
 
 
+REQUIRED = ("id", "label", "sumo", "content", "salt")
+
+
+def check_shape(m, where: str = "map") -> None:
+    """ValueError (with a reason) unless m looks like a map: {"owner": str, "nodes": [node]},
+    each node a dict carrying every REQUIRED field, with a string id and sumo, ids unique."""
+    if not isinstance(m, dict):
+        raise ValueError(f"{where}: a map must be a JSON object, got {type(m).__name__}")
+    for k, t in (("owner", str), ("nodes", list)):
+        if k not in m:
+            raise ValueError(f"{where}: missing field {k!r}")
+        if not isinstance(m[k], t):
+            raise ValueError(f"{where}: field {k!r} must be a {t.__name__}")
+    seen = set()
+    for i, n in enumerate(m["nodes"]):
+        if not isinstance(n, dict):
+            raise ValueError(f"{where}: node #{i} must be a JSON object, got {type(n).__name__}")
+        for k in REQUIRED:
+            if k not in n:
+                raise ValueError(f"{where}: node #{i} ({n.get('id', '?')!r}) is missing field {k!r}")
+        for k in ("id", "sumo"):
+            if not isinstance(n[k], str):
+                raise ValueError(f"{where}: node #{i}: field {k!r} must be a string")
+        for k in ("pubkey", "by"):
+            if k in n and not isinstance(n[k], str):
+                raise ValueError(f"{where}: node {n['id']!r}: field {k!r} must be a string")
+        if "same_as" in n and not (isinstance(n["same_as"], list) and all(isinstance(t, str) for t in n["same_as"])):
+            raise ValueError(f"{where}: node {n['id']!r}: same_as must be a list of \"owner:id\" strings")
+        if n["id"] in seen:
+            raise ValueError(f"{where}: node id {n['id']!r} appears twice")
+        seen.add(n["id"])
+
+
 def map_head(m: dict, base: str, where: str = "map") -> dict:
-    """The head fields for map m under base's vocabulary. Raises ValueError on a node tagged
-    with a term that is neither a base term nor a valid local term."""
+    """The head fields for map m under base's vocabulary. Raises ValueError on a malformed map
+    (check_shape) or a node tagged with a term that is neither a base term nor a valid local term."""
+    check_shape(m, where)
     terms, terms_sha = load_terms(base)
     extra = [n for n in m["nodes"] if n["sumo"] not in terms]
     if not extra:

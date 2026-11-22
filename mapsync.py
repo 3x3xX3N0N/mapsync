@@ -7,12 +7,14 @@ top root. Compare top roots to check sync; walk down to find what differs.
 
 Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
 
-    python3 mapsync.py root maps/alice/map.json     print a map's root
-    python3 mapsync.py sign maps/alice/map.json KEY write maps/alice/root.sig
-    python3 mapsync.py index                        rebuild index.json
-    python3 mapsync.py verify                       check everything; exit 0 if green
-    python3 mapsync.py diff A.json B.json           which nodes differ between two maps
+  maps and signatures
+    python3 mapsync.py root MAP                     print a map's Merkle root
+    python3 mapsync.py sign MAP KEY                 owner signs the root -> maps/OWNER/root.sig
     python3 mapsync.py agent-sign MAP NODE AGENTKEY the agent itself signs a node it wrote
+    python3 mapsync.py index                        rebuild index.json (top_root)
+    python3 mapsync.py verify                       check everything; exit 0 if green (malformed input = RED, no traceback)
+    python3 mapsync.py diff A.json B.json           which nodes differ between two maps
+  identity and meaning
     python3 mapsync.py names                        same name, different identity? (the two-Codys problem)
     python3 mapsync.py concepts [--flat]            line maps up by SUMO term, as a tree of subclasses
     python3 mapsync.py vocab [TERM]                 check the pinned hierarchy / show a term's ancestors
@@ -20,22 +22,30 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py suggest --map MAP            each node's tag vs the top suggestion (MISMATCH?)
     python3 mapsync.py tag MAP NODE TERM [--yes]    retag a node (only with --yes; never signs)
     python3 mapsync.py claims [--json] [--redact] [--strict]  same_as clusters side by side: AGREE/REFINES/CONTRADICTION
-    python3 mapsync.py g1                           sabotage each check; each must go red
-    python3 mapsync.py demo DIR [--local-terms]     build a fresh signed example world in DIR
+  proofs and sync
     python3 mapsync.py prove OWNER NODE [-o FILE]   inclusion proof revealing just that node
-    python3 mapsync.py check-proof FILE             check a proof alone; exit 0 if valid
+    python3 mapsync.py check-proof FILE [--signers F] [--top-root H]  check a proof alone; exit 0 if valid
     python3 mapsync.py sync-check OTHER [SECOND]    same top root? else walk down to owner, node
+  history and witnesses
     python3 mapsync.py log append                   publish the current state: append top_root to log/roots.jsonl
     python3 mapsync.py log show | log verify        list / check the hash-chained log of past top roots
     python3 mapsync.py log compare OTHER_LOG        prefix = consistent history; else FORK at seq N (exit 1)
     python3 mapsync.py anchor WITNESS KEY [--seq N] witness signs a receipt for a log entry (default: head)
     python3 mapsync.py anchor verify [--min-witnesses K]  check receipts; exit 1 if any invalid or head has < K
     python3 mapsync.py anchor export DIR            copy log + receipts + witnesses: a participant's own copy
+  keys
     python3 mapsync.py keys show OWNER              the owner's key chain (maps/OWNER/keys.jsonl) and lineages
-    python3 mapsync.py keys recovery OWNER OWNER_KEY RECOVERY_PUB   pre-register a recovery key
+    python3 mapsync.py keys recovery OWNER OWNER_KEY RECOVERY_PUB [--sign OLD_RECOVERY_KEY]  register a recovery key
     python3 mapsync.py keys rotate OWNER owner|agent:ID NEW_PUB --sign KEY [--sign KEY]  rotate a key
     python3 mapsync.py keys revoke OWNER owner|agent:ID KEY --by owner|recovery --signer KEY  revoke a key
     python3 mapsync.py keys verify                  check every key chain; exit 0 if green
+    (keys recovery/rotate/revoke also take --reason TEXT)
+  checking the checks
+    python3 mapsync.py g1 [--list]                  sabotage each check (incl. cross-key forgery); each must go red
+    python3 mapsync.py demo DIR [--local-terms]     build a fresh signed example world in DIR (throwaway keys)
+
+Signing namespaces (distinct, enforced): mapsync = owner roots, mapsync-agent = agent
+nodes, mapsync-keys = key-chain events, mapsync-anchor = witness receipts.
 
 Global option: --base DIR (default: this repo) = the world to work on. A relative map
 path is looked up under --base when one is given (else relative to the current dir).
@@ -105,7 +115,8 @@ def parser() -> argparse.ArgumentParser:
     cl.add_argument("--json", action="store_true", help="machine-readable output")
     cl.add_argument("--redact", action="store_true", help="show content as <hidden>")
     cl.add_argument("--strict", action="store_true", help="exit 1 if any CONTRADICTION")
-    add("g1", "sabotage each check; each must go red")
+    add("g1", "sabotage each check; each must go red") \
+        .add_argument("--list", action="store_true", help="only list the rows (group, name, expected)")
     add("demo", "build a fresh signed example world (ephemeral keys in DIR/keys)", "dir") \
         .add_argument("--local-terms", action="store_true",
                       help="tag the Codys CodingAgent and the routers RoutingAgent (local terms)")
@@ -279,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "claims":
         return claimset.claims(base, a.json, a.redact, a.strict)
     elif cmd == "g1":
-        return 0 if g1(base) else 1
+        return 0 if g1(base, a.list) else 1
     elif cmd == "prove":
         try:
             proof = prove(base, a.owner, a.node)

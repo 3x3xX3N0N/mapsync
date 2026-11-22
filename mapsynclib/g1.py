@@ -7,7 +7,9 @@ import tempfile
 
 from .files import append_text, read_json, write_json
 from .identity import names_report
-from .index import verify
+from .index import verify, write_index
+from .proofs import check_proof, prove
+from .sync import sync_report
 from .vocab import TERMS
 from .world import load, save
 
@@ -85,6 +87,55 @@ def cody_collision(d: str) -> bool:
     return "'cody'" in top and "COLLISION" in top
 
 
+def _step(p, k=0):
+    return p["map"]["path"][k]
+
+
+def _flip(side):
+    return "L" if side == "R" else "R"
+
+
+# (name, sabotage(proof of alice:review), check_proof should say valid?)
+PROOF_ROWS = [
+    ("proof: alice:review proves on its own", lambda p: None, True),
+    ("tamper a revealed node in a proof", lambda p: p["node"].update(content=p["node"]["content"] + "!"), False),
+    ("tamper a proof's audit path", lambda p: _step(p).update(hash=_step(p)["hash"][::-1]), False),
+    ("flip a left/right flag in a proof's path", lambda p: _step(p, 1).update(side=_flip(_step(p, 1)["side"])), False),
+    ("claim the proven node is bob's", lambda p: p.update(owner="bob"), False),
+]
+
+
+def proof_valid(d: str, sabotage) -> bool:
+    p = prove(d, "alice", "review")
+    sabotage(p)
+    return check_proof(p, os.path.join(d, "allowed_signers"))[0]
+
+
+def _change_review(d):
+    edit_map("alice", lambda m: next(n for n in m["nodes"] if n["id"] == "review")
+             .update(content="Changed after the fact"))(d)
+    write_index(d)
+
+
+# (name, sabotage(the other world), sync-check should report IN SYNC?)
+SYNC_ROWS = [
+    ("sync: an identical copy is IN SYNC", lambda d: None, True),
+    ("sync: change one node in the other world", _change_review, False),
+]
+
+
+def sync_finds(base: str, sabotage) -> bool:
+    d = sandbox(base)
+    try:
+        sabotage(d)
+        same, lines = sync_report(base, d)
+        if not same and "    ~ alice:review  differs" not in lines:
+            return True                           # out of sync but the walk-down missed it: BAD
+        return same
+    finally:
+        shutil.rmtree(d)
+
+
 def run_row(base: str, sabotage, check) -> bool:
     d = sandbox(base)
     try:
@@ -106,5 +157,15 @@ def g1(base: str) -> bool:
         good = got == want
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> collision {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
+    for name, sabotage, want in PROOF_ROWS:
+        got = run_row(base, lambda d: None, lambda d: proof_valid(d, sabotage))
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    for name, sabotage, want in SYNC_ROWS:
+        got = sync_finds(base, sabotage)
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
     print("G1: every sabotage went red, baseline green" if all_ok else "G1 FAILED: a check cannot go red")
     return all_ok

@@ -119,7 +119,10 @@ TimeInterval         bob:'Ship date'
 
 `g1` exists because a check that can't fail proves nothing. Each row breaks one thing
 (a word of content, a SUMO tag, a salt, the owner name, swapped signatures, the pinned
-term list, the index) and requires `verify` to go red.
+term list, the index) and requires `verify` to go red. Further rows tamper with a proof
+(revealed node, audit-path hash, a left/right flag, the claimed owner) and require
+`check-proof` to go red, and change one node in a copy of the world and require
+`sync-check` to name it.
 
 ### Add your own map
 
@@ -137,6 +140,45 @@ fresh random `salt` per node. An agent signs what it wrote with
 `python3 mapsync.py agent-sign maps/me/map.json NODE AGENT_KEY`, then the owner re-signs
 the map.
 
+### Prove one node, reveal nothing else (selective disclosure)
+
+`prove OWNER NODE` writes a self-contained JSON proof that a node is in its owner's signed
+map, and under `top_root`, without handing over the rest of the map:
+
+```bash
+python3 mapsync.py prove alice review -o review.proof.json
+python3 mapsync.py check-proof review.proof.json            # VALID ..., exit 0 (1 if invalid)
+python3 mapsync.py check-proof review.proof.json --signers THEIR_allowed_signers --top-root HEX
+```
+
+The proof holds the revealed node; its leaf hash; the Merkle audit path from that leaf to
+the map root (sibling hashes, each flagged `L`/`R`), plus a second path for the map head
+(`{owner, sumo_terms_sha}`, leaf 0); the leaf index and count; the owner's `root.sig`; the
+pinned term list; and the owner's index entry with its path (and the term-list sha's path)
+up to `top_root`. `check_proof` rebuilds everything from the proof alone and runs
+`ssh-keygen -Y verify` against the allowed_signers file *you* trust. It needs no other node,
+and no access to the world. The flags have to match what `merkle()` builds for that
+index and count, including the odd-level rule (a lone last hash pairs with itself), so a
+path can't be reshuffled. The other nodes show up only as hashes, and their salts mean you
+can't guess their content. What does leak: the leaf count (how many nodes) and the node's
+position in id order. A node written by an agent is revealed with its `by` field, but the
+proof doesn't carry the agent's own signature (`verify` checks that on the full world).
+`top_root` is only as good as your copy of it: pin the one you anchored with `--top-root`.
+
+### Are we in sync? Walk down
+
+```bash
+python3 mapsync.py sync-check /path/to/their/world      # or their index.json; exit 0 if in sync
+python3 mapsync.py sync-check WORLD_A WORLD_B            # compare two others
+```
+
+Same `top_root`: `IN SYNC`. Otherwise it walks down: vocabulary changed, owners only here
+(`-`) or only there (`+`), owners whose root changed (`~`) and, when both sides have the maps,
+which node ids differ (`~ alice:review  differs`, the same logic as `diff`). An owner
+with the same root but a new signature shows as re-signed. A world whose `index.json`
+doesn't match its own maps gets a warning. `sync-check` compares what was published.
+`verify` is what checks the signatures.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -153,7 +195,7 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab`, `world`, `signing`, `index`, `identity`, `demo`, `g1`). Tests in `tests/` use
+`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)

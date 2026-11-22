@@ -17,6 +17,9 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py concepts                     line maps up by SUMO term, not label
     python3 mapsync.py g1                           sabotage each check; each must go red
     python3 mapsync.py demo DIR                     build a fresh signed example world in DIR
+    python3 mapsync.py prove OWNER NODE [-o FILE]   inclusion proof revealing just that node
+    python3 mapsync.py check-proof FILE             check a proof alone; exit 0 if valid
+    python3 mapsync.py sync-check OTHER [SECOND]    same top root? else walk down to owner, node
 
 Global option: --base DIR (default: this repo) = the world to work on. A relative map
 path is looked up under --base when one is given (else relative to the current dir).
@@ -24,6 +27,7 @@ path is looked up under --base when one is given (else relative to the current d
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -33,7 +37,10 @@ from mapsynclib.g1 import g1
 from mapsynclib.hashing import map_root
 from mapsynclib.identity import names
 from mapsynclib.index import verify, write_index
+from mapsynclib.files import read_json, write_json
+from mapsynclib.proofs import check_proof, prove
 from mapsynclib.signing import agent_sign, sign
+from mapsynclib.sync import sync_report
 from mapsynclib.vocab import concepts
 from mapsynclib.world import diff
 
@@ -67,6 +74,13 @@ def parser() -> argparse.ArgumentParser:
     add("concepts", "line maps up by SUMO term, not label")
     add("g1", "sabotage each check; each must go red")
     add("demo", "build a fresh signed example world (ephemeral keys in DIR/keys)", "dir")
+    add("prove", "inclusion proof for one node (others only as hashes)", "owner", "node") \
+        .add_argument("-o", "--out", help="write the proof here (default: stdout)")
+    c = add("check-proof", "check a proof on its own; exit 0 if valid", "file")
+    c.add_argument("--signers", help="allowed_signers file to trust (default: BASE/allowed_signers)")
+    c.add_argument("--top-root", help="also require this top_root")
+    s = add("sync-check", "compare with another world (dir or index.json); exit 0 if in sync", "other")
+    s.add_argument("second", nargs="?", help="compare OTHER with this instead of with --base")
     return p
 
 
@@ -93,6 +107,31 @@ def main(argv: list[str] | None = None) -> int:
         concepts(base)
     elif cmd == "g1":
         return 0 if g1(base) else 1
+    elif cmd == "prove":
+        try:
+            proof = prove(base, a.owner, a.node)
+        except (KeyError, ValueError, FileNotFoundError) as e:
+            print(f"cannot prove: {e.args[0] if e.args else e}", file=sys.stderr)
+            return 1
+        if a.out:
+            write_json(a.out, proof, indent=2, ensure_ascii=False)
+            print(f"proof of {a.owner}:{a.node} -> {a.out}")
+        else:
+            print(json.dumps(proof, indent=2, ensure_ascii=False))
+    elif cmd == "check-proof":
+        try:
+            proof = read_json(a.file)
+        except (OSError, ValueError) as e:
+            print(f"INVALID  cannot read proof: {e}")
+            return 1
+        good, why = check_proof(proof, a.signers or os.path.join(base, "allowed_signers"), a.top_root)
+        print(f"{'VALID' if good else 'INVALID'}  {why}")
+        return 0 if good else 1
+    elif cmd == "sync-check":
+        here, there = (a.other, a.second) if a.second else (base, a.other)
+        same, lines = sync_report(here, there)
+        print("\n".join(lines))
+        return 0 if same else 1
     elif cmd == "demo":
         w = make_world(os.path.abspath(a.dir))
         print(f"world in {w['base']}  top_root {w['top_root']}")

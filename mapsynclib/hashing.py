@@ -35,8 +35,60 @@ def merkle(hashes: list[str]) -> str:
     while len(level) > 1:
         if len(level) % 2:
             level = level + [level[-1]]
-        level = [sha(b"\x01" + bytes.fromhex(a) + bytes.fromhex(b)) for a, b in zip(level[::2], level[1::2])]
+        level = [inner(a, b) for a, b in zip(level[::2], level[1::2])]
     return level[0]
+
+
+def inner(a: str, b: str) -> str:
+    return sha(b"\x01" + bytes.fromhex(a) + bytes.fromhex(b))
+
+
+def path_sides(i: int, n: int) -> list[str]:
+    """Where the sibling sits at each level for leaf i of n, under merkle()'s rule that an
+    odd level duplicates its last hash. "L" = sibling on the left, "R" = on the right."""
+    if not 0 <= i < n:
+        raise ValueError(f"leaf index {i} out of range for {n} leaves")
+    out = []
+    while n > 1:
+        n += n % 2
+        out.append("L" if i % 2 else "R")
+        i, n = i // 2, n // 2
+    return out
+
+
+def merkle_path(hashes: list[str], i: int) -> list[dict]:
+    """Audit path for hashes[i]: [{"hash": sibling, "side": "L"|"R"}, ...] bottom-up.
+    Climbing it from hashes[i] gives merkle(hashes). A duplicated last hash is its own sibling."""
+    path, level = [], list(hashes)
+    path_sides(i, len(level))                     # range check
+    while len(level) > 1:
+        if len(level) % 2:
+            level = level + [level[-1]]
+        j = i ^ 1
+        path.append({"hash": level[j], "side": "L" if j < i else "R"})
+        level = [inner(a, b) for a, b in zip(level[::2], level[1::2])]
+        i //= 2
+    return path
+
+
+def climb(h: str, path: list[dict], i: int, n: int) -> str:
+    """Recompute the root from leaf hash h at index i of n along `path`. Raises ValueError if
+    the path's shape or flags don't match what merkle() would have built for (i, n)."""
+    sides = path_sides(i, n)
+    if len(path) != len(sides):
+        raise ValueError(f"audit path has {len(path)} steps, {len(sides)} expected for leaf {i} of {n}")
+    for k, (step, want) in enumerate(zip(path, sides)):
+        if step.get("side") != want:
+            raise ValueError(f"audit path step {k}: side {step.get('side')!r}, expected {want!r}")
+        sib = step["hash"]
+        if len(sib) != 64 or bytes.fromhex(sib).hex() != sib:
+            raise ValueError(f"audit path step {k}: not a sha256 hex digest")
+        if n % 2 and i == n - 1 and sib != h:     # lone last hash: paired with itself
+            raise ValueError(f"audit path step {k}: odd level must duplicate the last hash")
+        h = inner(sib, h) if want == "L" else inner(h, sib)
+        n = (n + n % 2) // 2
+        i //= 2
+    return h
 
 
 def head(owner: str, terms_sha: str) -> str:

@@ -12,6 +12,16 @@ from .vocab import load_terms
 from .world import map_path, owners
 
 
+def entry_hash(e: dict) -> str:
+    """An index entry's leaf in the top tree (no 0x00 prefix: kept as shipped)."""
+    return sha(json.dumps(e, sort_keys=True).encode())
+
+
+def top_leaves(idx: dict) -> list[str]:
+    """The top tree's leaves: one per map entry (sorted by owner), then the terms sha."""
+    return [entry_hash(e) for e in idx["maps"]] + [idx["sumo_terms_sha"]]
+
+
 def build_index(base: str) -> dict:
     _, terms_sha = load_terms(base)
     entries = []
@@ -19,7 +29,7 @@ def build_index(base: str) -> dict:
         root = map_root(map_path(base, o), base)
         sig = read_bytes(os.path.join(base, "maps", o, "root.sig")).decode()
         entries.append({"owner": o, "root": root, "sig_sha": sha(sig.encode())})
-    top = merkle([sha(json.dumps(e, sort_keys=True).encode()) for e in entries] + [terms_sha])
+    top = merkle(top_leaves({"maps": entries, "sumo_terms_sha": terms_sha}))
     return {"sumo_terms_sha": terms_sha, "maps": entries, "top_root": top}
 
 

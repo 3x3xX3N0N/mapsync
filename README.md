@@ -137,6 +137,25 @@ fresh random `salt` per node. An agent signs what it wrote with
 `python3 mapsync.py agent-sign maps/me/map.json NODE AGENT_KEY`, then the owner re-signs
 the map.
 
+### Other worlds, demo worlds, tests
+
+Every command takes a global `--base DIR` (default: this repo), the world to work on.
+`demo DIR` builds a complete signed world shaped like the example (alice, bob, two
+unrelated Codys, agent-signed nodes, `same_as` links) with fresh throwaway ed25519 keys in
+`DIR/keys/`, so you can sign, break and re-sign things without the example's private
+keys, which aren't in the repo.
+
+```bash
+python3 mapsync.py demo /tmp/w                 # fresh keys + signed maps + index.json
+python3 mapsync.py --base /tmp/w verify        # green
+python3 mapsync.py --base /tmp/w g1            # same sabotage rows, on that world
+python3 -m unittest discover tests             # the test suite (stdlib unittest)
+```
+
+Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
+`vocab`, `world`, `signing`, `index`, `identity`, `demo`, `g1`). Tests in `tests/` use
+`mapsynclib.demo.make_world(dir)` for anything that needs a private key.
+
 ## Open problems (not solved here)
 
 - **SUMO's upper terms are coarse.** `concepts` above lumps the coordinator and both

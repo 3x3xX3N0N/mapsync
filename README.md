@@ -33,7 +33,7 @@ Three layers, each solving one part:
 | **meaning** | do two maps mean the same thing? | every node is tagged with a [SUMO](https://github.com/ontologyportal/sumo) term |
 
 ```
-                    top_root  ──► anchor publicly (timestamp) = the outside witness
+                    top_root  ──► log/roots.jsonl ──► witnesses sign receipts (anchors/)
                    /    |    \
          alice root   bob root   sumo-terms sha     ◄── index.json: signed roots only
           /  |  \       /  |  \
@@ -219,6 +219,66 @@ python3 mapsync.py log compare THEIR_roots.jsonl   # OK if one is a prefix of th
 rewrites a past entry, drops one, reorders them, and leaves the index ahead of the log
 head, and `verify` has to go red for each.
 
+### Anchoring: witnesses sign receipts for log entries
+
+The log proves nothing about *when*, and whoever keeps it can rewrite it whole and re-link
+every line. Anchoring answers "this was our map at time X": a **witness** (anyone whose
+public key is listed in `witnesses`, same format as `allowed_signers`) signs a receipt for
+one log entry with namespace `mapsync-anchor`:
+
+```
+anchors/<seq>-<top_root[:16]>-<witness>.json
+{"version": 1, "witness": "w1", "log_seq": 0, "entry_sha": "a397…", "top_root": "5063…",
+ "witnessed_at": "2026-11-20T04:23:03Z", "statement_sha": "26b8…", "sig": "-----BEGIN SSH SIGNATURE-----…"}
+```
+
+The signed statement is the canonical JSON (`sort_keys`, no spaces) of every field except
+`sig` and `statement_sha`; `statement_sha` is its sha256. `entry_sha` pins the whole log line,
+and through its `prev`, all history before it.
+
+```bash
+python3 mapsync.py anchor WITNESS KEY [--seq N]       # witness signs a receipt for the log head (or seq N)
+python3 mapsync.py anchor verify [--min-witnesses K]  # every receipt valid? head has >= K witnesses? (default K=0)
+python3 mapsync.py anchor export DIR                  # copy log + receipts + witnesses: your own copy
+python3 mapsync.py log compare DIR/log/roots.jsonl    # later: has the log been rewritten since?
+```
+
+- **`anchor` refuses** if `log verify` fails, the entry doesn't exist, the witness isn't
+  listed, or KEY isn't that witness's key.
+- **A receipt is valid** when its file name matches its contents, `statement_sha` matches,
+  the signature is by the key listed for *that* witness name (a receipt by A relabelled as B
+  fails), and the log still holds the same `entry_sha` and `top_root` at `log_seq`.
+  `anchor verify` reports each receipt and the number of distinct witnesses per log entry.
+  It exits 1 if any receipt is invalid or the head has fewer than K witnesses.
+- **`verify` checks receipts too** when `anchors/` exists. An invalid receipt is RED. An
+  unwitnessed head is only a note, since a new state can't be witnessed before it exists.
+  A receipt whose `seq`/`top_root`/`entry_sha` is no longer in the log is RED: history was
+  rewritten (or truncated) after it was witnessed, even if the rewriter re-chained every
+  line. That's the "this was our map at time X" guarantee.
+- **Keep your own copy.** A rewriter can delete receipts along with history. A witness
+  who ran `anchor export` still holds the old log and their receipt, so `log compare`
+  against that copy reports the fork, and `--base DIR anchor verify` re-checks the copy on
+  its own.
+
+**Local witnesses, not public timestamps.** A receipt is only as good as the witness: it
+shows that a key you chose to trust signed this entry, and `witnessed_at` is the witness's
+own clock. It isn't a public timestamp. Nothing is published to a transparency log,
+blockchain or RFC 3161 timestamp authority. That's out of scope by operator decision
+(no network). Several independent witnesses who each keep an export get you most of the way:
+rewriting history then needs every one of them to collude or lose their copy.
+
+**Shipped example:** the repo ships one demo receipt, `anchors/0-5063e96c07099d44-demo-witness.json`,
+for log seq 0. It was signed by a throwaway `demo-witness` key generated in `/tmp`. Only the
+public key is committed (in `witnesses`); the private key was deleted right after signing and
+never entered the repo. It exists so `verify` exercises the receipt path on the shipped
+world. Nobody can sign as `demo-witness` again, so treat it as an example, not a trust root.
+To witness for real, add your own `name ssh-ed25519 …` line to `witnesses` and run `anchor`.
+
+`g1` builds a two-entry history witnessed by two fresh keys (`w1`, `w2`) in its sandbox. It
+backdates a receipt's `witnessed_at` (recomputing `statement_sha`, so only the signature can
+catch it), rewrites seq 0 and re-chains the log after it was anchored, relabels w1's receipt
+as w2's, and adds a receipt signed by an unlisted key. `verify` has to go red for each.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -235,7 +295,7 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `log`, `demo`, `g1`). Tests in `tests/` use
+`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)
@@ -254,12 +314,12 @@ Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashi
   agents. An agent's key changing today means a "new" agent.
 - **Cross-key forgery isn't in `g1`.** The sandbox has no private keys, so "Alice's Cody
   signs Bob's node" was checked by hand (it goes red), not automatically.
-- **Anchoring isn't automated.** `top_root` is printed. Publishing it is up to you.
-- **The log can be withheld or rewritten whole.** `log/roots.jsonl` (see "History") makes
-  quiet edits to the past break the chain, but whoever keeps it can still skip publishing
-  an entry, or rewrite history and re-link every later line. Both show up only when someone
-  runs `log compare` against a copy they kept (or an anchored head). Nobody signs log
-  entries yet, and nobody is forced to keep a copy.
+- **Witnesses are local, not public.** Anchoring (see "Anchoring") has witnesses sign
+  receipts locally. No public timestamp or transparency log is involved, by operator
+  decision. A rewrite that also deletes the receipts shows up only against a witness's
+  exported copy, and nobody is forced to keep one.
+- **The log can be withheld.** Whoever keeps `log/roots.jsonl` can still skip publishing an
+  entry. Witnesses can only sign what they're shown.
 
 ## Lineage
 

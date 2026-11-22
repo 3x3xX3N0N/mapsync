@@ -54,6 +54,16 @@ def demo_maps(pub: dict) -> dict:
     }
 
 
+def add_witness(base: str, name: str, keydir: str | None = None) -> str:
+    """Fresh ephemeral witness key in keydir (default BASE/keys); its public key is appended
+    to BASE/witnesses. Returns the private key path."""
+    key = os.path.join(keydir or os.path.join(base, "keys"), f"witness_{name}")
+    pub = keygen(key, f"witness:{name}")
+    with open(os.path.join(base, "witnesses"), "a") as f:
+        f.write(f"{name} {pub}\n")
+    return key
+
+
 def make_world(dir: str, terms_from: str = REPO) -> dict:
     """Build a full signed world in `dir`. Returns
     {"base": dir, "owners": {owner: private_key_path}, "agents": {"owner:agent": private_key_path},

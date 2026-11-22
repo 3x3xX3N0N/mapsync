@@ -23,6 +23,9 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py log append                   publish the current state: append top_root to log/roots.jsonl
     python3 mapsync.py log show | log verify        list / check the hash-chained log of past top roots
     python3 mapsync.py log compare OTHER_LOG        prefix = consistent history; else FORK at seq N (exit 1)
+    python3 mapsync.py anchor WITNESS KEY [--seq N] witness signs a receipt for a log entry (default: head)
+    python3 mapsync.py anchor verify [--min-witnesses K]  check receipts; exit 1 if any invalid or head has < K
+    python3 mapsync.py anchor export DIR            copy log + receipts + witnesses: a participant's own copy
 
 Global option: --base DIR (default: this repo) = the world to work on. A relative map
 path is looked up under --base when one is given (else relative to the current dir).
@@ -40,6 +43,7 @@ from mapsynclib.g1 import g1
 from mapsynclib.hashing import map_root
 from mapsynclib.identity import names
 from mapsynclib.index import verify, write_index
+from mapsynclib import anchor as anchors
 from mapsynclib import log as rootlog
 from mapsynclib.files import read_json, write_json
 from mapsynclib.proofs import check_proof, prove
@@ -92,7 +96,34 @@ def parser() -> argparse.ArgumentParser:
     lsub.add_parser("verify", help="chain intact and head == index.json; exit 0 if so", parents=[common])
     lsub.add_parser("compare", help="is one log a prefix of the other? exit 1 on fork",
                     parents=[common]).add_argument("other", help="the other roots.jsonl")
+    an = add("anchor", "witness receipts for log entries: anchor WITNESS KEY | anchor verify | anchor export DIR")
+    an.add_argument("args", nargs="+", metavar="WITNESS KEY | verify | export DIR")
+    an.add_argument("--seq", type=int, help="log entry to witness (default: the head)")
+    an.add_argument("--min-witnesses", type=int, default=0, metavar="K",
+                    help="anchor verify: the log head needs K distinct witnesses (default 0)")
     return p
+
+
+def anchor_cmd(a, base: str) -> int:
+    args = a.args
+    try:
+        if args == ["verify"]:
+            return 0 if anchors.anchor_checks(base, print, a.min_witnesses) else 1
+        if len(args) == 2 and args[0] == "export":
+            copied = anchors.export(base, os.path.abspath(args[1]))
+            print(f"exported {len(copied)} files to {args[1]}: {', '.join(copied)}")
+            print(f"later: python3 mapsync.py log compare {os.path.join(args[1], rootlog.LOG)}")
+            return 0
+        if len(args) == 2 and args[0] not in anchors.RESERVED:
+            p, r = anchors.anchor(base, args[0], args[1], a.seq)
+            print(f"{r['witness']} witnessed seq {r['log_seq']} top_root {r['top_root'][:16]}… -> {p}")
+            return 0
+    except (ValueError, OSError, KeyError) as e:
+        print(f"anchor: {e}", file=sys.stderr)
+        return 1
+    print("usage: anchor WITNESS KEY [--seq N] | anchor verify [--min-witnesses K] | anchor export DIR",
+          file=sys.stderr)
+    return 2
 
 
 def log_cmd(a, base: str) -> int:
@@ -129,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             print("note: index.json is not published until `log append` records it", file=sys.stderr)
     elif cmd == "log":
         return log_cmd(a, base)
+    elif cmd == "anchor":
+        return anchor_cmd(a, base)
     elif cmd == "verify":
         return 0 if verify(base) else 1
     elif cmd == "diff":

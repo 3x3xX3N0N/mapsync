@@ -228,6 +228,7 @@ class Shipped(unittest.TestCase):
     def test_no_log_is_a_green_note(self):
         d = shipped_copy(self)
         shutil.rmtree(os.path.join(d, "log"))
+        shutil.rmtree(os.path.join(d, "anchors"), ignore_errors=True)   # receipts need the log they witness
         ok, out = quietly(verify, d)
         self.assertTrue(ok)
         self.assertIn("note", out)

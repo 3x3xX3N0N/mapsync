@@ -59,5 +59,8 @@ def verify(base: str, quiet: bool = False) -> bool:
     ok &= same
     from .log import log_checks                   # log imports index; import late
     ok &= log_checks(base, say)
+    from .anchor import anchor_checks, anchors_dir
+    if os.path.isdir(anchors_dir(base)):          # receipts: invalid = RED, unwitnessed head = note
+        ok &= anchor_checks(base, say)
     say("GREEN: every map signed by its owner, index matches" if ok else "RED")
     return ok

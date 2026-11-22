@@ -1,10 +1,14 @@
 """g1: every green must be able to go red. Break one thing per row in a sandbox."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import tempfile
 
+from .anchor import ANCHORS, WITNESSES, anchor, anchors_dir, receipt_for, statement
+from .demo import add_witness, keygen
 from .files import append_text, read_json, write_json
 from .identity import names_report
 from .hashing import merkle
@@ -23,8 +27,11 @@ def sandbox(base: str, d: str | None = None) -> str:
         shutil.copytree(os.path.join(base, x), os.path.join(d, x))
     for x in ("index.json", "allowed_signers"):
         shutil.copy(os.path.join(base, x), d)
-    if os.path.exists(log_path(base)):
-        shutil.copytree(os.path.join(base, "log"), os.path.join(d, "log"))
+    for x in ("log", ANCHORS):
+        if os.path.isdir(os.path.join(base, x)):
+            shutil.copytree(os.path.join(base, x), os.path.join(d, x))
+    if os.path.exists(os.path.join(base, WITNESSES)):
+        shutil.copy(os.path.join(base, WITNESSES), d)
     return d
 
 
@@ -81,6 +88,7 @@ def _with_history(d):
     early["top_root"] = merkle([entry_hash(e) for e in early["maps"]] + [idx["sumo_terms_sha"]])
     e0 = entry_for(early, 0, ZERO, now=1_700_000_000)
     e1 = entry_for(idx, 1, entry_sha(canonical(e0)), now=1_700_086_400)
+    shutil.rmtree(anchors_dir(d), ignore_errors=True)   # receipts belonged to the replaced history
     os.makedirs(os.path.dirname(log_path(d)), exist_ok=True)
     with open(log_path(d), "wb") as f:
         f.write(canonical(e0) + b"\n" + canonical(e1) + b"\n")
@@ -97,7 +105,6 @@ def _edit_log(fn):
 
 
 def _restamp_first(lines):
-    import json
     e = json.loads(lines[0])
     e["recorded_at"] = "2023-11-15T00:00:00Z"   # backdate seq 0, re-serialized canonically
     return [canonical(e)] + lines[1:]
@@ -110,6 +117,79 @@ LOG_ROWS = [
     ("drop a log entry", _edit_log(lambda ls: ls[1:]), False),
     ("reorder the log's lines", _edit_log(lambda ls: ls[::-1]), False),
     ("index newer than the log head", _edit_log(lambda ls: ls[:-1]), False),
+]
+
+
+def _rechain(lines):
+    """Rewrite seq 0 and re-link every later prev: a self-consistent forged history."""
+    out, prev = [], ZERO
+    for line in _restamp_first(lines):
+        e = {**json.loads(line), "prev": prev}
+        out.append(canonical(e))
+        prev = entry_sha(out[-1])
+    return out
+
+
+def _witnessed(d):
+    """Fixture: the two-entry history, witnessed by w1 and w2 (fresh keys in d/keys; the
+    sandbox's own witness list replaces any shipped one). Returns the private key paths."""
+    _with_history(d)
+    if os.path.exists(os.path.join(d, WITNESSES)):
+        os.remove(os.path.join(d, WITNESSES))
+    keys = {w: add_witness(d, w) for w in ("w1", "w2")}
+    for w, k in keys.items():
+        for seq in (0, 1):
+            anchor(d, w, k, seq, now=1_700_100_000)
+    return keys
+
+
+def _receipt(d, seq=1, witness="w1"):
+    p = next(os.path.join(anchors_dir(d), f) for f in os.listdir(anchors_dir(d))
+             if f.startswith(f"{seq}-") and f.endswith(f"-{witness}.json"))
+    return p, read_json(p)
+
+
+def _tamper_receipt(d):
+    _witnessed(d)
+    p, r = _receipt(d)
+    r["witnessed_at"] = "2023-01-01T00:00:00Z"          # backdate it, and fix up statement_sha
+    r["statement_sha"] = hashlib.sha256(statement(r)).hexdigest()
+    write_json(p, r)
+
+
+def _rewrite_after_anchor(d):
+    _witnessed(d)
+    lines = _rechain(read_lines(log_path(d)))
+    with open(log_path(d), "wb") as f:
+        f.write(b"".join(x + b"\n" for x in lines))
+
+
+def _relabel(d):
+    _witnessed(d)
+    p, r = _receipt(d, witness="w1")
+    os.remove(p)
+    r["witness"] = "w2"                                # w1's signature, now claiming to be w2's
+    r["statement_sha"] = hashlib.sha256(statement(r)).hexdigest()
+    os.remove(_receipt(d, witness="w2")[0])
+    write_json(os.path.join(anchors_dir(d), f"1-{r['top_root'][:16]}-w2.json"), r)
+
+
+def _unlisted_key(d):
+    _witnessed(d)
+    k = os.path.join(d, "keys", "mallory")             # a key nobody listed in witnesses
+    keygen(k, "mallory")
+    lines = read_lines(log_path(d))
+    r = receipt_for("w1", k, 1, lines[1], json.loads(lines[1])["top_root"], now=1_700_100_000)
+    write_json(_receipt(d, witness="w1")[0], r)
+
+
+# (name, sabotage(dir), verify should be green?) -- on a witnessed two-entry log (fresh keys)
+ANCHOR_ROWS = [
+    ("anchor: a witnessed history stays green", _witnessed, True),
+    ("tamper an anchor receipt", _tamper_receipt, False),
+    ("rewrite log entry after it was anchored", _rewrite_after_anchor, False),
+    ("relabel w1's receipt as w2's", _relabel, False),
+    ("anchor receipt signed by an unlisted key", _unlisted_key, False),
 ]
 
 
@@ -197,6 +277,11 @@ def g1(base: str) -> bool:
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
     for name, sabotage, want in LOG_ROWS:
+        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    for name, sabotage, want in ANCHOR_ROWS:
         got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
         good = got == want
         all_ok &= good

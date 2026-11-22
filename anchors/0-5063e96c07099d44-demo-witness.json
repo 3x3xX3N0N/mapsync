@@ -1,0 +1,10 @@
+{
+  "entry_sha": "c3eec9fd57e2815f865a534df843f47418e77a2c24b5b667bf9f09d46c56ac63",
+  "log_seq": 0,
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgj1mNm2E/KBkINTqO/sptByyn2q\nJtpnki0kx9AkNk18wAAAAObWFwc3luYy1hbmNob3IAAAAAAAAABnNoYTUxMgAAAFMAAAAL\nc3NoLWVkMjU1MTkAAABAcfGl1SVE7C4bn2JBb+LHA0MPcV1Ab61jTTXM/G9xGOJsZR5pT+\nt//UdlW2UjQ31iTlRJhddV54CXvrfeRSghCA==\n-----END SSH SIGNATURE-----\n",
+  "statement_sha": "f32ea960ebf0847a226c7476e59829c0193700fa702a9b07aa55f9c05b0994ec",
+  "top_root": "5063e96c07099d44d4ea013eacaebc0b089ebf151c64ebc8e05178d7cf61f7fd",
+  "version": 1,
+  "witness": "demo-witness",
+  "witnessed_at": "2026-11-20T04:23:03Z"
+}

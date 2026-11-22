@@ -14,9 +14,10 @@ import subprocess
 from . import REPO
 from .files import read_text
 from .index import write_index
+from .suggest import LEXICON
 from .signing import agent_sign, sign
 from .vocab import TERMS, VOCAB_FILES
-from .world import map_path, save
+from .world import load, map_path, save
 
 
 def keygen(path: str, comment: str = "") -> str:
@@ -76,13 +77,13 @@ def add_witness(base: str, name: str, keydir: str | None = None) -> str:
 
 def make_world(dir: str, terms_from: str = REPO, local_terms: bool = False) -> dict:
     """Build a full signed world in `dir`. The vocabulary (terms.txt and whichever of
-    hierarchy/local/disjoint.txt exist) is copied from `terms_from`. local_terms: see
+    hierarchy/local/disjoint/lexicon.txt exist) is copied from `terms_from`. local_terms: see
     demo_maps (needs sumo/local.txt declaring CodingAgent and RoutingAgent). Returns
     {"base": dir, "owners": {owner: private_key_path}, "agents": {"owner:agent": private_key_path},
      "pubkeys": {name: "ssh-ed25519 AAAA..."}, "top_root": ...}."""
     os.makedirs(os.path.join(dir, "sumo"), exist_ok=True)
     shutil.copy(os.path.join(terms_from, TERMS), os.path.join(dir, TERMS))
-    for f in VOCAB_FILES:
+    for f in VOCAB_FILES + (LEXICON,):
         if os.path.exists(os.path.join(terms_from, f)):
             shutil.copy(os.path.join(terms_from, f), os.path.join(dir, f))
     kd = os.path.join(dir, "keys")
@@ -106,3 +107,14 @@ def make_world(dir: str, terms_from: str = REPO, local_terms: bool = False) -> d
         sign(map_path(dir, o), keys["owners"][o], dir, quiet=True)
     idx = write_index(dir)
     return {"base": dir, **keys, "pubkeys": pub, "top_root": idx["top_root"]}
+
+
+def resign(w: dict, owner: str) -> None:
+    """After an edit to `owner`'s map in world w (from make_world): every agent re-signs the
+    nodes it wrote (`by`), the owner re-signs the root, and the index is rebuilt."""
+    base = w["base"]
+    for n in load(base, owner)["nodes"]:
+        if "by" in n:
+            agent_sign(map_path(base, owner), n["id"], w["agents"][f"{owner}:{n['by']}"], quiet=True)
+    sign(map_path(base, owner), w["owners"][owner], base, quiet=True)
+    write_index(base)

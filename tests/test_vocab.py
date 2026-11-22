@@ -10,6 +10,7 @@ from mapsynclib.files import append_text, read_bytes, read_json, write_bytes
 from mapsynclib.hashing import head, map_root, map_root_of
 from mapsynclib.index import build_index, verify, write_index
 from mapsynclib.proofs import check_proof, prove
+from mapsynclib.suggest import LEXICON
 from mapsynclib.vocab import (DISJOINT, HIERARCHY, LOCAL, TERMS, VOCAB_FILES, VocabError, concepts_report,
                               concepts_tree, load_terms, load_vocab, parse_vocab, vocab_report)
 from mapsynclib.world import load, map_path
@@ -131,7 +132,7 @@ class Pinning(unittest.TestCase):
     def test_base_term_maps_ignore_the_hierarchy(self):
         b = shipped_copy(self)
         shutil.rmtree(os.path.join(b, "maps", "carol"))     # the one map that uses local terms
-        for f in VOCAB_FILES:
+        for f in VOCAB_FILES + (LEXICON,):   # an older world: no hierarchy, no lexicon
             os.remove(os.path.join(b, f))
         self.assertEqual(map_root(map_path(b, "alice"), b), SHIPPED_ROOTS["alice"])
         self.assertNotIn("vocab_sha", build_index(b))
@@ -257,7 +258,7 @@ class Proofs(unittest.TestCase):
     def test_proof_from_world_without_vocab_files(self):
         b = shipped_copy(self)
         shutil.rmtree(os.path.join(b, "maps", "carol"))
-        for f in VOCAB_FILES:
+        for f in VOCAB_FILES + (LEXICON,):   # an older world: no hierarchy, no lexicon
             os.remove(os.path.join(b, f))
         write_index(b)
         p = prove(b, "alice", "review")

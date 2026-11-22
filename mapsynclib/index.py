@@ -19,9 +19,11 @@ def entry_hash(e: dict) -> str:
 
 def top_leaves(idx: dict) -> list[str]:
     """The top tree's leaves: one per map entry (sorted by owner), then the terms sha, then
-    the vocab sha (hierarchy + local + disjoint) if the world has those files."""
+    the vocab sha (hierarchy + local + disjoint) if the world has those files, then the
+    lexicon sha (sumo/lexicon.txt, the tag suggester's word list) if the world has one."""
     return ([entry_hash(e) for e in idx["maps"]] + [idx["sumo_terms_sha"]]
-            + ([idx["vocab_sha"]] if "vocab_sha" in idx else []))
+            + ([idx["vocab_sha"]] if "vocab_sha" in idx else [])
+            + ([idx["lexicon_sha"]] if "lexicon_sha" in idx else []))
 
 
 def build_index(base: str) -> dict:
@@ -39,6 +41,10 @@ def build_index(base: str) -> dict:
     idx = {"sumo_terms_sha": terms_sha}
     if vocab.present:                             # only when the files exist: old worlds hash as before
         idx["vocab_sha"] = vocab.sha
+    from .suggest import load_lexicon             # validated against the vocabulary: invalid = ValueError
+    lexicon = load_lexicon(base, vocab)
+    if lexicon is not None:                       # only when sumo/lexicon.txt exists
+        idx["lexicon_sha"] = lexicon.sha
     idx["maps"] = entries
     idx["top_root"] = merkle(top_leaves(idx))
     return idx

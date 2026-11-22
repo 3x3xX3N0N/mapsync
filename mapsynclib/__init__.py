@@ -11,6 +11,8 @@
     log       log/roots.jsonl: append-only hash-chained log of top roots; fork detection
     keys      maps/<owner>/keys.jsonl: key rotation, revocation, recovery; stable key lineages
     anchor    anchors/: witness-signed receipts for log entries (local anchoring)
+    suggest   offline tag suggester (sumo/lexicon.txt, pinned); `suggest`, `tag`
+    claims    same_as clusters side by side; AGREE / REFINES / CONTRADICTION; `claims`
     demo      make_world(dir): a complete signed world with fresh keys
     g1        sabotage each check; each must go red
 """

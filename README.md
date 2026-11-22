@@ -107,6 +107,8 @@ python3 mapsync.py g1         # sabotage each check in a sandbox; every one must
 python3 mapsync.py concepts   # line the maps up by meaning, not by label (a subclass tree)
 python3 mapsync.py vocab CodingAgent   # where a term sits: ancestors, subclasses, disjoint classes
 python3 mapsync.py names      # same name, different identity? (the two Codys)
+python3 mapsync.py suggest Release note   # offline tag suggestions (a human confirms with `tag ... --yes`)
+python3 mapsync.py claims     # same_as clusters side by side: AGREE / REFINES / CONTRADICTION
 python3 mapsync.py diff maps/alice/map.json maps/bob/map.json
 ```
 
@@ -142,7 +144,9 @@ term list, the index) and requires `verify` to go red. Further rows tamper with 
 and leave the index ahead of the log head. Key rows forge the key chain (see "Keys").
 Vocabulary rows edit `sumo/local.txt` under maps that use it, add a subclass cycle, an
 unknown parent, a redefined base term, and a class under two disjoint classes (see
-"Vocabulary").
+"Vocabulary"). Lexicon rows edit `sumo/lexicon.txt` or point a word at an unknown term,
+and a claims row retags a linked pair with disjoint terms and requires `claims` to show
+`CONTRADICTION` (see "Suggesting tags" and "Claims").
 
 ### Add your own map
 
@@ -433,6 +437,101 @@ The hierarchy is still curated by hand. The edges are a small, deliberately chos
 of SUMO (intermediate classes are collapsed and named in comments), not SUMO's full
 axioms.
 
+### Suggesting tags: an offline lexicon, and a human who says yes
+
+Nobody picks from thousands of SUMO terms by hand, so `suggest` proposes tags and a person
+confirms them. It is offline and deterministic: no LLM, no network, no randomness.
+
+`sumo/lexicon.txt` holds lines `word Term [weight]` (weight defaults to 1), in the spirit of
+the WordNet→SUMO mappings but hand-curated: 139 entries covering every base and local term.
+Text and lexicon words are both stemmed the simple way (lowercase, strip plural s/es, -ing,
+-ed, then a trailing e and a doubled final consonant: note/notes, plan/planning, ship/shipped
+meet). Every lexicon hit adds its weight to its term. Ties go to the more specific term (more
+ancestors in the pinned hierarchy), then alphabetically. Each Term must be a base or local
+term, a word can't be listed twice for one term, and a bad line is red in `verify`.
+
+The lexicon is pinned like the hierarchy. `lexicon_sha` (plain sha256 of the file) is a key
+in `index.json`, the last leaf of the top tree, and a field in new log entries. Proofs carry
+it with its audit path. Map roots don't depend on it, so editing the lexicon changes only
+`top_root` and needs `index` + `log append`; until then `verify` is red. Adding it moved the
+shipped top root to `49cc8207…` (log seq 2). alice, bob and carol's roots are unchanged.
+
+```bash
+python3 mapsync.py suggest Cody coding agent   # top 5: Term score (ancestors)
+python3 mapsync.py suggest --map bob           # each node: its tag vs the top suggestion
+python3 mapsync.py tag bob deadline Event      # says what it would do; writes nothing
+python3 mapsync.py tag bob deadline Event --yes   # writes the tag, then reminds you to re-sign
+```
+
+```
+CodingAgent               3  (ComputerProgram -> Proposition)
+ComputerProgram           1  (Proposition)
+Agent                     1  (top)
+```
+
+```
+bob:cody          tag ComputerProgram     suggest CodingAgent 3   related
+bob:orchestrator  tag ComputerProgram     suggest RoutingAgent 3  related
+bob:prcheck       tag IntentionalProcess  suggest Requesting 4    related
+bob:changelog     tag Text                suggest Text 5          same
+bob:deadline      tag TimeInterval        suggest TimeInterval 4  same
+```
+
+`suggest --map` marks `same`, `related` (one is_a the other) or `MISMATCH?` (unrelated: worth
+a look, not an error). `tag` writes only with `--yes` and **never signs**. Afterwards
+`verify` is red until the owner re-signs the map (`sign`), and, if the node has `by`, the
+agent re-signs its node first (`agent-sign`). Then run `index` and `log append`. Retagging
+a base-tagged map with a local term also makes its head pin `vocab_sha`.
+
+### Claims: disagreement side by side, not a sync failure
+
+Two maps can both be validly signed and still say different things about the same thing.
+`claims` doesn't pick a winner. It shows everyone's signed claims side by side, each one
+attributed.
+
+Nodes joined by `same_as` (LINKED, CLAIMED, either way an edge) form identity clusters, the
+connected components. Each member shows `owner:id`, label, SUMO tag, content (`<hidden>`
+with `--redact`), its author (`by` agent with its key lineage id, or the owner), and the
+signed map root it sits in. Each pair in a cluster gets one verdict:
+
+| verdict | meaning |
+|---|---|
+| `AGREE` | same term |
+| `REFINES` | one is_a the other: one claim is just more specific |
+| `CONTRADICTION` | the terms are disjoint (`sumo/disjoint.txt`, inherited) |
+| `DIFFERENT KIND` | none of these (or a term the vocabulary doesn't know) |
+
+```bash
+python3 mapsync.py claims             # text; --json for machines; --redact hides content
+python3 mapsync.py claims --strict    # exit 1 if any CONTRADICTION (CI-style gate)
+```
+
+```
+cluster 1: alice:notes, bob:changelog
+  alice:notes    'Release note'  Text  'Draft of what shipped this week'
+                 by agent alice:cody [key b35d00c4]; in alice's root 656b6e9d362ee0bb… (signed)
+  bob:changelog  'Changelog'     Text  'Draft of what shipped this week'
+                 by agent bob:cody [key a8dad593]; in bob's root 2ea2aa8c1191e1d9… (signed)
+  alice:notes ~ bob:changelog  CLAIMED: AGREE  (both Text)
+cluster 2: alice:review, bob:prcheck
+  alice:review  'Review readiness'  IntentionalProcess  'Check a change is ready for review'
+                by agent alice:cody [key b35d00c4]; in alice's root 656b6e9d362ee0bb… (signed)
+  bob:prcheck   'PR check'          IntentionalProcess  'Make sure a pull request is good to go'
+                by owner bob; in bob's root 2ea2aa8c1191e1d9… (signed)
+  alice:review ~ bob:prcheck  LINKED: AGREE  (both IntentionalProcess)
+2 cluster(s): 2 AGREE, 0 REFINES, 0 CONTRADICTION, 0 DIFFERENT KIND
+```
+
+A pair that is only in the same cluster through others is marked `via cluster`. A
+contradiction is a finding: nothing is merged, both claims stay signed as they are, and
+`verify` stays green (a test retags alice:review `Human` and bob:prcheck `ComputerProgram`,
+re-signs, and gets `CONTRADICTION`, `claims --strict` exit 1, `verify` exit 0).
+
+**This is a lexicon plus a disjointness check over a small pinned hierarchy, not a SUMO
+reasoner.** It knows subclass edges and declared disjoint pairs, nothing else. It doesn't
+reason over SUMO's axioms, relations or rules the way Sigma does, so many real
+contradictions (in content, numbers, time) go unseen.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -449,18 +548,17 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab` (terms, hierarchy, concepts), `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
+`vocab` (terms, hierarchy, concepts), `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `suggest`, `claims`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)
 
-- **Tagging is work.** Nobody will hand-pick from tens of thousands of terms. The
-  realistic path is a suggester (WordNet→SUMO mappings, or an LLM) proposing a tag and a
-  human confirming it.
-- **Disagreement isn't a sync failure.** Two maps can both be valid and still contradict.
-  The goal is that everyone sees the same *set of signed claims*, side by side and
-  attributed, not that a merge picks a winner. Contradiction checks would need a
-  reasoner over SUMO's axioms (e.g. Sigma), which this prototype doesn't do.
+- **Suggestions are only as good as a small lexicon.** `suggest` (see "Suggesting tags")
+  is a hand-curated word list, not WordNet's full mapping or a language model. It misses
+  synonyms it doesn't list, and a human still has to confirm every tag.
+- **Contradiction checks are shallow.** `claims` (see "Claims") catches only tags declared
+  disjoint in the pinned hierarchy. A real reasoner over SUMO's axioms (e.g. Sigma) would
+  find much more. It also can't see disagreement in free-text content.
 - **Key compromise is bounded, not solved.** Rotation, revocation and recovery exist (see
   "Keys"), but a thief holding both the owner and recovery keys wins, there's no trusted
   time, and revoking a key reddens its honest past signatures too.

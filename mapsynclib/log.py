@@ -5,7 +5,8 @@ One canonical JSON object per line (sort_keys, separators (",",":")):
     {"seq": 0, "prev": <entry_sha of the previous line, or 64 zeros>, "top_root": hex,
      "maps": [{"owner", "root"}...], "sumo_terms_sha": hex, "recorded_at": "YYYY-MM-DDTHH:MM:SSZ"}
 
-plus "vocab_sha": hex when the index has one (the world has sumo/hierarchy.txt etc.).
+plus "vocab_sha": hex when the index has one (the world has sumo/hierarchy.txt etc.), and
+"lexicon_sha": hex when the world has sumo/lexicon.txt.
 
 entry_sha(line) = sha256(0x02 || canonical line bytes). Each line commits to the whole
 history before it, so rewriting, dropping or reordering a past entry breaks every later
@@ -28,7 +29,7 @@ from .signing import sig_ok
 LOG = os.path.join("log", "roots.jsonl")
 ZERO = "0" * 64
 KEYS = {"seq", "prev", "top_root", "maps", "sumo_terms_sha", "recorded_at"}
-OPTIONAL_KEYS = {"vocab_sha"}
+OPTIONAL_KEYS = {"vocab_sha", "lexicon_sha"}
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
 
@@ -104,15 +105,16 @@ def entry_for(idx: dict, seq: int, prev: str, now: float | None = None) -> dict:
          "maps": [{"owner": m["owner"], "root": m["root"]} for m in idx["maps"]],
          "sumo_terms_sha": idx["sumo_terms_sha"],
          "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
-    if "vocab_sha" in idx:
-        e["vocab_sha"] = idx["vocab_sha"]
+    for k in sorted(OPTIONAL_KEYS):
+        if k in idx:
+            e[k] = idx[k]
     return e
 
 
 def head_matches(head: dict, idx: dict) -> bool:
     """Does the log head record exactly this index state (top_root, roots, vocabulary)?"""
     return (head["top_root"] == idx.get("top_root") and head["sumo_terms_sha"] == idx.get("sumo_terms_sha")
-            and head.get("vocab_sha") == idx.get("vocab_sha")
+            and all(head.get(k) == idx.get(k) for k in OPTIONAL_KEYS)
             and head["maps"] == [{"owner": m.get("owner"), "root": m.get("root")} for m in idx.get("maps", [])])
 
 

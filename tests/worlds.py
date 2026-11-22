@@ -20,8 +20,9 @@ SHIPPED_ROOTS = {
     "bob": "2ea2aa8c1191e1d9c8e7960623187919e0c29f95191697265bcb65c2d8762af7",
     "carol": "18aabd5eb9a6c7d1933fae29eb5f2767e34663c69f97ebf3a225f8a2d857627a",   # [C6] local terms
 }
-# log seq 1: alice + bob + carol, top tree also commits to vocab_sha ([C6])
-SHIPPED_TOP = "258d5f37997883156dc469d3b35d23eea76b41e3974dd0e6bbdbe6ca7ccc6209"
+# log seq 2: alice + bob + carol; top tree commits to vocab_sha ([C6]) and lexicon_sha ([C7])
+SHIPPED_TOP = "49cc820718131edf8f48a417f4bb4da9418c0d06c7dc1fe0446a762df8dbb866"
+SHIPPED_TOP_V1 = "258d5f37997883156dc469d3b35d23eea76b41e3974dd0e6bbdbe6ca7ccc6209"   # log seq 1: + vocab_sha
 SHIPPED_TOP_V0 = "5063e96c07099d44d4ea013eacaebc0b089ebf151c64ebc8e05178d7cf61f7fd"   # log seq 0: alice + bob
 
 

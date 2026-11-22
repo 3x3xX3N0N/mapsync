@@ -41,7 +41,8 @@ def prove(base: str, owner: str, node_id: str) -> dict:
         raise ValueError("index.json does not match the maps; run `index` first")
     j = [e["owner"] for e in idx["maps"]].index(owner)
     top = top_leaves(idx)
-    tail = 2 if "vocab_sha" in idx else 1
+    lex = 1 if "lexicon_sha" in idx else 0
+    tail = 1 + ("vocab_sha" in idx) + lex
     proof = {
         "format": FORMAT,
         "owner": owner,
@@ -69,7 +70,10 @@ def prove(base: str, owner: str, node_id: str) -> dict:
     }
     if "vocab_sha" in idx:                        # hierarchy files, and their place under top_root
         proof["vocab"] = {f: raw.decode() for f, raw in vocab_raws(base).items()}
-        proof["index"]["vocab_path"] = merkle_path(top, len(top) - 1)
+        proof["index"]["vocab_path"] = merkle_path(top, len(top) - 1 - lex)
+    if lex:                                       # the suggester's lexicon: committed, not revealed
+        proof["index"]["lexicon_sha"] = idx["lexicon_sha"]
+        proof["index"]["lexicon_path"] = merkle_path(top, len(top) - 1)
     return proof
 
 
@@ -137,13 +141,18 @@ def _check(p: dict, allowed_signers: str, top_root: str | None) -> str | None:
     if e != want:
         return "index entry does not match the owner, map root and signature"
     m, j = ix["leaf_count"], ix["entry_index"]
-    tail = 1 if vocab is None else 2              # terms sha (and vocab sha) after the entries
+    lex = ix.get("lexicon_sha")                   # lexicon sha last, if the index has one
+    if lex is not None and (not isinstance(lex, str) or len(lex) != 64):
+        return "index lexicon_sha is not a sha256 hex digest"
+    tail = 1 + (vocab is not None) + (lex is not None)   # terms sha (vocab sha, lexicon sha) after the entries
     if not 0 <= j < m - tail:
         return f"entry index {j} is not a map position (0..{m - tail - 1})"
     try:
         tops = [climb(entry_hash(e), ix["path"], j, m), climb(terms_sha, ix["terms_path"], m - tail, m)]
         if vocab is not None:
-            tops.append(climb(vocab.sha, ix["vocab_path"], m - 1, m))
+            tops.append(climb(vocab.sha, ix["vocab_path"], m - 1 - (lex is not None), m))
+        if lex is not None:
+            tops.append(climb(lex, ix["lexicon_path"], m - 1, m))
     except ValueError as err:
         return f"index audit path: {err}"
     if any(t != ix["top_root"] for t in tops):

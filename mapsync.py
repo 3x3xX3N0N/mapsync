@@ -16,6 +16,10 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py names                        same name, different identity? (the two-Codys problem)
     python3 mapsync.py concepts [--flat]            line maps up by SUMO term, as a tree of subclasses
     python3 mapsync.py vocab [TERM]                 check the pinned hierarchy / show a term's ancestors
+    python3 mapsync.py suggest TEXT...              offline tag suggester: top-5 SUMO terms for TEXT
+    python3 mapsync.py suggest --map MAP            each node's tag vs the top suggestion (MISMATCH?)
+    python3 mapsync.py tag MAP NODE TERM [--yes]    retag a node (only with --yes; never signs)
+    python3 mapsync.py claims [--json] [--redact] [--strict]  same_as clusters side by side: AGREE/REFINES/CONTRADICTION
     python3 mapsync.py g1                           sabotage each check; each must go red
     python3 mapsync.py demo DIR [--local-terms]     build a fresh signed example world in DIR
     python3 mapsync.py prove OWNER NODE [-o FILE]   inclusion proof revealing just that node
@@ -55,6 +59,8 @@ from mapsynclib import log as rootlog
 from mapsynclib.files import read_json, write_json
 from mapsynclib.proofs import check_proof, prove
 from mapsynclib.signing import agent_sign, sign
+from mapsynclib import claims as claimset
+from mapsynclib import suggest as suggester
 from mapsynclib.sync import sync_report
 from mapsynclib.vocab import concepts, vocab_report
 from mapsynclib.world import diff
@@ -90,6 +96,15 @@ def parser() -> argparse.ArgumentParser:
         .add_argument("--flat", action="store_true", help="one line per term, no hierarchy (the old output)")
     add("vocab", "validate sumo/hierarchy.txt, local.txt, disjoint.txt; or show TERM's place") \
         .add_argument("term", nargs="?")
+    sg = add("suggest", "offline tag suggester (sumo/lexicon.txt): top-5 terms for TEXT, or --map MAP")
+    sg.add_argument("text", nargs="*")
+    sg.add_argument("--map", help="owner name or map.json: each node's tag vs the top suggestion")
+    tg = add("tag", "retag a node: prints what it would do unless --yes; never signs", "map", "node", "term")
+    tg.add_argument("--yes", action="store_true", help="really write the new tag")
+    cl = add("claims", "same_as clusters side by side, attributed; AGREE/REFINES/CONTRADICTION/DIFFERENT KIND")
+    cl.add_argument("--json", action="store_true", help="machine-readable output")
+    cl.add_argument("--redact", action="store_true", help="show content as <hidden>")
+    cl.add_argument("--strict", action="store_true", help="exit 1 if any CONTRADICTION")
     add("g1", "sabotage each check; each must go red")
     add("demo", "build a fresh signed example world (ephemeral keys in DIR/keys)", "dir") \
         .add_argument("--local-terms", action="store_true",
@@ -242,6 +257,27 @@ def main(argv: list[str] | None = None) -> int:
         ok, lines = vocab_report(base, a.term)
         print("\n".join(lines))
         return 0 if ok else 1
+    elif cmd == "suggest":
+        try:
+            if a.map:
+                lines = suggester.suggest_map(base, a.map)
+            elif a.text:
+                lines = suggester.suggest_text(base, " ".join(a.text))
+            else:
+                print("usage: suggest TEXT... | suggest --map MAP", file=sys.stderr)
+                return 2
+        except (ValueError, OSError) as e:
+            print(f"suggest: {e}", file=sys.stderr)
+            return 1
+        print("\n".join(lines))
+    elif cmd == "tag":
+        try:
+            print("\n".join(suggester.tag(base, a.map, a.node, a.term, a.yes)))
+        except (ValueError, KeyError, OSError) as e:
+            print(f"tag: {e.args[0] if e.args else e}", file=sys.stderr)
+            return 1
+    elif cmd == "claims":
+        return claimset.claims(base, a.json, a.redact, a.strict)
     elif cmd == "g1":
         return 0 if g1(base) else 1
     elif cmd == "prove":

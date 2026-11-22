@@ -20,6 +20,8 @@ from .sync import sync_report
 from . import REPO
 from .vocab import HIERARCHY, LOCAL, TERMS, VOCAB_FILES, load_vocab
 from .world import load, save
+from .claims import CONTRADICTION, gather as gather_claims
+from .suggest import LEXICON
 
 
 def sandbox(base: str, d: str | None = None) -> str:
@@ -79,6 +81,8 @@ VERIFY_ROWS = [
     ("point same_as at a node that doesn't exist", edit_map("bob", lambda m: _first(m).update(same_as=["alice:nope"])), False),
     ("edit the pinned SUMO term list", lambda d: append_text(os.path.join(d, TERMS), "Unicorn\n"), False),
     ("rewrite index.json top_root", _rewrite_top, False),
+    ("edit the pinned lexicon", lambda d: append_text(os.path.join(d, LEXICON), "gizmo ComputerProgram\n"), False),
+    ("lexicon maps a word to an unknown term", lambda d: append_text(os.path.join(d, LEXICON), "gizmo Gadget\n"), False),
 ]
 
 
@@ -333,6 +337,22 @@ NAMES_ROWS = [
 ]
 
 
+def _retag(owner, node, term):
+    return edit_map(owner, lambda m: next(n for n in m["nodes"] if n["id"] == node).update(sumo=term))
+
+
+# (name, sabotage(dir), a CONTRADICTION should be shown?) -- claims reads tags, not signatures
+CLAIMS_ROWS = [
+    ("claims: shipped clusters show no CONTRADICTION", lambda d: None, False),
+    ("disjoint linked tags must show CONTRADICTION", _then(_retag("alice", "review", "Human"),
+                                                           _retag("bob", "prcheck", "ComputerProgram")), True),
+]
+
+
+def contradiction_shown(d: str) -> bool:
+    return any(p["verdict"] == CONTRADICTION for c in gather_claims(d)["clusters"] for p in c["pairs"])
+
+
 def cody_collision(d: str) -> bool:
     top = "\n".join(names_report(d)).split("-- same_as")[0]
     return "'cody'" in top and "COLLISION" in top
@@ -353,6 +373,7 @@ PROOF_ROWS = [
     ("tamper a proof's audit path", lambda p: _step(p).update(hash=_step(p)["hash"][::-1]), False),
     ("flip a left/right flag in a proof's path", lambda p: _step(p, 1).update(side=_flip(_step(p, 1)["side"])), False),
     ("claim the proven node is bob's", lambda p: p.update(owner="bob"), False),
+    ("tamper the lexicon sha in a proof", lambda p: p["index"].update(lexicon_sha="0" * 64), False),
     ("tamper the hierarchy files in a proof", lambda p: p.setdefault("vocab", {}).update(
         {LOCAL: p.get("vocab", {}).get(LOCAL, "") + "Gadget ComputerProgram\n"}), False),
 ]
@@ -430,6 +451,11 @@ def g1(base: str) -> bool:
         good = got == want
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> collision {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
+    for name, sabotage, want in CLAIMS_ROWS:
+        got = run_row(base, sabotage, contradiction_shown)
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> CONTRADICTION {'shown' if got else 'not shown'} (expected {'shown' if want else 'not shown'})")
     for name, sabotage, want in PROOF_ROWS:
         got = run_row(base, lambda d: None, lambda d: proof_valid(d, sabotage))
         good = got == want

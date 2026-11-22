@@ -1,0 +1,179 @@
+# Word -> SUMO term lexicon for the offline tag suggester (`suggest`): `word Term [weight]`.
+# In the spirit of the WordNet->SUMO mappings (Niles & Pease), but hand-curated and tiny.
+# Words are stemmed on load and in the text (lowercase; plural s/es, -ing, -ed stripped), so
+# write them in their plain form. Weight defaults to 1. A word may name several terms.
+# Every Term must be a base term (terms.txt) or a local term (local.txt).
+# Pinned: its sha256 is a leaf under top_root (index.json lexicon_sha).
+
+# Agent (SUMO: something that can act)
+agent Agent
+actor Agent
+somebody Agent
+someone Agent
+party Agent
+
+# Human
+person Human 2
+human Human 2
+people Human 2
+user Human
+lead Human
+owner Human
+manager Human
+engineer Human
+developer Human
+reviewer Human
+customer Human
+colleague Human
+he Human
+she Human
+
+# Organization
+team Organization 2
+company Organization 2
+organization Organization 2
+org Organization
+group Organization
+department Organization
+committee Organization
+vendor Organization
+
+# ComputerProgram
+program ComputerProgram 2
+software ComputerProgram 2
+bot ComputerProgram 2
+script ComputerProgram 2
+tool ComputerProgram
+app ComputerProgram
+service ComputerProgram
+daemon ComputerProgram
+agent ComputerProgram
+model ComputerProgram
+llm ComputerProgram 2
+assistant ComputerProgram
+
+# CodingAgent (local: a program that writes and changes code)
+coding CodingAgent 2
+coder CodingAgent 2
+programmer CodingAgent
+copilot CodingAgent 2
+cody CodingAgent
+
+# RoutingAgent (local: a program that hands work to other agents)
+router RoutingAgent 2
+route RoutingAgent 2
+orchestrator RoutingAgent 2
+dispatcher RoutingAgent 2
+dispatch RoutingAgent 2
+switchboard RoutingAgent 2
+coordinator RoutingAgent 2
+hand RoutingAgent
+psyche RoutingAgent
+
+# Process (something that happens)
+process Process 2
+run Process
+build Process
+deploy Process
+ship Process
+work Process
+happen Process
+change Process
+
+# IntentionalProcess (done on purpose)
+check IntentionalProcess 2
+review IntentionalProcess 2
+test IntentionalProcess
+verify IntentionalProcess
+readiness IntentionalProcess
+ready IntentionalProcess
+task IntentionalProcess
+make IntentionalProcess
+fix IntentionalProcess
+merge IntentionalProcess
+
+# Planning
+plan Planning 2
+roadmap Planning 2
+schedule Planning
+sprint Planning 2
+next Planning
+backlog Planning
+prioritize Planning
+
+# Communication
+communication Communication 2
+message Communication
+talk Communication
+meeting Communication
+discuss Communication
+notify Communication
+announce Communication
+
+# LinguisticCommunication (local: SUMO mid-level)
+say LinguisticCommunication
+tell LinguisticCommunication
+write LinguisticCommunication
+email LinguisticCommunication
+chat LinguisticCommunication
+
+# Directing (local)
+direct Directing
+instruct Directing 2
+order Directing
+command Directing
+assign Directing
+
+# Requesting (local)
+ask Requesting 2
+request Requesting 2
+please Requesting
+pull Requesting
+pr Requesting
+
+# Proposition (abstract content: an idea, a claim)
+idea Proposition 2
+claim Proposition 2
+belief Proposition 2
+fact Proposition
+rule Proposition
+policy Proposition
+goal Proposition
+requirement Proposition
+decision Proposition
+
+# Text
+text Text 2
+note Text 2
+release Text
+changelog Text 3
+document Text 2
+doc Text 2
+draft Text 2
+readme Text 2
+report Text
+summary Text
+page Text
+writeup Text
+
+# Event (not a SUMO class here: left unrelated to Process)
+event Event 2
+incident Event 2
+outage Event 2
+launch Event
+milestone Event
+happening Event
+
+# TimeInterval
+date TimeInterval 2
+deadline TimeInterval 3
+day TimeInterval
+week TimeInterval
+month TimeInterval
+year TimeInterval
+quarter TimeInterval
+friday TimeInterval 2
+monday TimeInterval 2
+time TimeInterval
+period TimeInterval
+duration TimeInterval

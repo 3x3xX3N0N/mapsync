@@ -54,6 +54,13 @@ def demo_maps(pub: dict) -> dict:
     }
 
 
+def fresh_key(base: str, name: str, keydir: str | None = None) -> tuple[str, str]:
+    """A new ephemeral key pair BASE/keys/<name> (for rotations, recovery keys...).
+    Returns (private key path, public key line)."""
+    key = os.path.join(keydir or os.path.join(base, "keys"), name)
+    return key, keygen(key, name)
+
+
 def add_witness(base: str, name: str, keydir: str | None = None) -> str:
     """Fresh ephemeral witness key in keydir (default BASE/keys); its public key is appended
     to BASE/witnesses. Returns the private key path."""

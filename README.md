@@ -123,7 +123,7 @@ term list, the index) and requires `verify` to go red. Further rows tamper with 
 (revealed node, audit-path hash, a left/right flag, the claimed owner) and require
 `check-proof` to go red, and change one node in a copy of the world and require
 `sync-check` to name it. Log rows rewrite, drop and reorder past entries of the root log,
-and leave the index ahead of the log head.
+and leave the index ahead of the log head. Key rows forge the key chain (see "Keys").
 
 ### Add your own map
 
@@ -279,6 +279,87 @@ backdates a receipt's `witnessed_at` (recomputing `statement_sha`, so only the s
 catch it), rewrites seq 0 and re-chains the log after it was anchored, relabels w1's receipt
 as w2's, and adds a receipt signed by an unlisted key. `verify` has to go red for each.
 
+### Keys: rotation, revocation, recovery; identity is the key lineage
+
+Keys get lost, stolen and replaced. If identity were "the current key", a rotated Cody would
+be a new Cody. So identity is the **lineage**: the chain of keys an owner or agent has had,
+named by the fingerprint of its *first* key. Rotate Alice's Cody three times and `names`
+still says `alice:cody [key b35d00c4, rotated 3 times]`, still distinct from Bob's Cody.
+
+Each owner may keep `maps/<owner>/keys.jsonl`, an append-only hash-chained event log (no
+file = keys are exactly what `allowed_signers` and the maps' `pubkey` fields say, as
+before). One canonical JSON line per event:
+
+```
+{"at":"2026-11-20T04:30:29Z","new_key":"ssh-ed25519 AAAA…","old_key":"ssh-ed25519 AAAA…","prev":"0000…","reason":"rotate","seq":0,"sigs":{"old":"-----BEGIN SSH SIGNATURE-----…","owner":"…"},"subject":"agent:cody","type":"rotate"}
+```
+
+`prev` is `sha256(0x03 || previous line)`; each entry in `sigs` is an ssh signature
+(namespace `mapsync-keys`) over the line without `sigs`, by the key its role names:
+`owner` (the owner's current key), `old` (`old_key`), `new` (`new_key`) or `recovery`.
+
+| event | subject | who must sign |
+|---|---|---|
+| `recovery` | owner | owner; replacing an existing recovery key also needs the old recovery key |
+| `rotate` | owner | new key **and** the old key (or the recovery key). Once the owner key is revoked, only recovery + new |
+| `rotate` | `agent:<id>` | owner (optionally also the old/new agent key); the node's `pubkey` becomes `new_key` and the owner re-signs the map |
+| `revoke` | owner or `agent:<id>` | owner (current, unrevoked key) or recovery; `old_key` = the key revoked, current or retired |
+
+```bash
+python3 mapsync.py keys show alice                                   # events, lineages, chain head
+python3 mapsync.py keys recovery alice ALICE_KEY RECOVERY.pub        # pre-register a recovery key
+python3 mapsync.py keys rotate alice agent:cody NEW.pub --sign ALICE_KEY --sign OLD_CODY_KEY
+python3 mapsync.py keys rotate alice owner NEW.pub --sign ALICE_KEY --sign NEW_KEY   # updates allowed_signers, re-signs
+python3 mapsync.py keys revoke alice agent:cody OLD_CODY.pub --by owner --signer ALICE_KEY
+python3 mapsync.py keys revoke alice owner STOLEN.pub --by recovery --signer RECOVERY_KEY
+python3 mapsync.py keys rotate alice owner NEW.pub --sign RECOVERY_KEY --sign NEW_KEY   # after a lost/stolen owner key
+python3 mapsync.py keys verify                                       # every chain; exit 0 if green
+python3 mapsync.py index && python3 mapsync.py log append           # publish the new chain
+```
+
+`--sign` keys are matched to roles by their public key. A command refuses (and writes
+nothing) if the resulting chain wouldn't verify. What `verify` checks when a chain exists:
+
+- **The chain is intact and authorised.** `seq` contiguous, `prev` correct, lines
+  canonical, every signature valid for its role, every event signed by who the table says,
+  no key reused. A forged, reordered or dropped line, or a rotation that the old key didn't
+  sign, is RED.
+- **Owner:** `root.sig` must verify under the *current* owner key at the chain head, that
+  key must not be revoked, and `allowed_signers` must hold that same key (a mismatch is RED).
+- **Agents:** the node's `pubkey` must be the lineage's current key. A node signature counts
+  if it's by the current key *or a retired (rotated) one*: rotation is honest, so old
+  signatures stay green. A signature by a **revoked** key is RED (treated as compromised)
+  until the node is re-signed with the current key.
+- **Published:** when a chain exists, the owner's index entry gains `keys_sha` (sha256 of
+  `keys.jsonl`), so the chain is under `top_root` and goes into the log with it. Maps
+  without a chain hash exactly as before; the shipped roots and top root are unchanged.
+
+The owner's first key is the `old_key` of the first owner rotate/revoke line, or
+`allowed_signers` if there is none. An agent's first key is the `old_key` of its first line.
+
+**Limits, honestly:**
+- **Whoever holds the recovery key wins.** A thief with only the owner key can rotate it,
+  but recovery can revoke the thief's key and rotate past it, and the thief can't replace
+  the recovery key. A thief with the owner key *and* the recovery key owns the identity.
+  Lose both and the identity is gone; start a new lineage.
+- **No trusted time.** `at` is the signer's own clock. The order of events is the chain's
+  order; published via `log append` (and anchored, if you use witnesses), that's the only
+  "when". A retired key that is stolen later can still make signatures that look old, which
+  is why `revoke` works on retired keys too.
+- **Revocation is retroactive.** Revoking a key turns *everything* it signed red, including
+  honest signatures made before the theft, since there's no trusted time to tell them
+  apart. Re-sign with the current key.
+- **The chain can be withheld or forked** like the root log: whoever hosts `keys.jsonl` can
+  show an older chain. Compare logs (or anchors) to catch it; `keys_sha` makes any change
+  visible in `top_root`.
+- **The first key is trusted on first use.** Nothing outside `allowed_signers` (or the
+  first chain line) vouches for it.
+
+`g1` builds a freshly keyed world in its sandbox, rotates Alice's Cody and registers a
+recovery key (green), then: an owner rotation signed only by the new key, revoking Cody's
+old key while its signatures remain, a forged chain line, reordered chain lines, and
+`allowed_signers` disagreeing with the chain head. `verify` has to go red for each.
+
 ### Other worlds, demo worlds, tests
 
 Every command takes a global `--base DIR` (default: this repo), the world to work on.
@@ -295,7 +376,7 @@ python3 -m unittest discover tests             # the test suite (stdlib unittest
 ```
 
 Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashing`,
-`vocab`, `world`, `signing`, `index`, `identity`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
+`vocab`, `world`, `signing`, `index`, `identity`, `keys`, `proofs`, `sync`, `log`, `anchor`, `demo`, `g1`). Tests in `tests/` use
 `mapsynclib.demo.make_world(dir)` for anything that needs a private key.
 
 ## Open problems (not solved here)
@@ -310,8 +391,9 @@ Code layout: `mapsync.py` is the CLI only; the logic is in `mapsynclib/` (`hashi
   The goal is that everyone sees the same *set of signed claims*, side by side and
   attributed, not that a merge picks a winner. Contradiction checks would need a
   reasoner over SUMO's axioms (e.g. Sigma), which this prototype doesn't do.
-- **Keys.** Lost or stolen keys, rotation, and revocation aren't handled, for owners or
-  agents. An agent's key changing today means a "new" agent.
+- **Key compromise is bounded, not solved.** Rotation, revocation and recovery exist (see
+  "Keys"), but a thief holding both the owner and recovery keys wins, there's no trusted
+  time, and revoking a key reddens its honest past signatures too.
 - **Cross-key forgery isn't in `g1`.** The sandbox has no private keys, so "Alice's Cody
   signs Bob's node" was checked by hand (it goes red), not automatically.
 - **Witnesses are local, not public.** Anchoring (see "Anchoring") has witnesses sign

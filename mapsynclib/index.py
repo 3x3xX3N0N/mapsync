@@ -28,7 +28,11 @@ def build_index(base: str) -> dict:
     for o in owners(base):
         root = map_root(map_path(base, o), base)
         sig = read_bytes(os.path.join(base, "maps", o, "root.sig")).decode()
-        entries.append({"owner": o, "root": root, "sig_sha": sha(sig.encode())})
+        e = {"owner": o, "root": root, "sig_sha": sha(sig.encode())}
+        kp = os.path.join(base, "maps", o, "keys.jsonl")
+        if os.path.exists(kp):                    # only when present: old worlds hash as before
+            e["keys_sha"] = sha(read_bytes(kp))
+        entries.append(e)
     top = merkle(top_leaves({"maps": entries, "sumo_terms_sha": terms_sha}))
     return {"sumo_terms_sha": terms_sha, "maps": entries, "top_root": top}
 
@@ -52,6 +56,8 @@ def verify(base: str, quiet: bool = False) -> bool:
         say(f"{'ok ' if good else 'RED'}  {e['owner']}: root {e['root'][:16]}… signature {'valid' if good else 'INVALID'}")
         ok &= good
     ok &= identity_checks(base, say)
+    from .keys import key_checks
+    ok &= key_checks(base, say)                   # no keys.jsonl anywhere: a note, green
     stored = read_json(os.path.join(base, "index.json"))
     same = stored == fresh
     say(f"{'ok ' if same else 'RED'}  index.json top_root {stored.get('top_root', '?')[:16]}… "

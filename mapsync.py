@@ -26,6 +26,11 @@ Stdlib only, plus `ssh-keygen` for signatures. Logic lives in mapsynclib/.
     python3 mapsync.py anchor WITNESS KEY [--seq N] witness signs a receipt for a log entry (default: head)
     python3 mapsync.py anchor verify [--min-witnesses K]  check receipts; exit 1 if any invalid or head has < K
     python3 mapsync.py anchor export DIR            copy log + receipts + witnesses: a participant's own copy
+    python3 mapsync.py keys show OWNER              the owner's key chain (maps/OWNER/keys.jsonl) and lineages
+    python3 mapsync.py keys recovery OWNER OWNER_KEY RECOVERY_PUB   pre-register a recovery key
+    python3 mapsync.py keys rotate OWNER owner|agent:ID NEW_PUB --sign KEY [--sign KEY]  rotate a key
+    python3 mapsync.py keys revoke OWNER owner|agent:ID KEY --by owner|recovery --signer KEY  revoke a key
+    python3 mapsync.py keys verify                  check every key chain; exit 0 if green
 
 Global option: --base DIR (default: this repo) = the world to work on. A relative map
 path is looked up under --base when one is given (else relative to the current dir).
@@ -44,6 +49,7 @@ from mapsynclib.hashing import map_root
 from mapsynclib.identity import names
 from mapsynclib.index import verify, write_index
 from mapsynclib import anchor as anchors
+from mapsynclib import keys as keychain
 from mapsynclib import log as rootlog
 from mapsynclib.files import read_json, write_json
 from mapsynclib.proofs import check_proof, prove
@@ -101,7 +107,55 @@ def parser() -> argparse.ArgumentParser:
     an.add_argument("--seq", type=int, help="log entry to witness (default: the head)")
     an.add_argument("--min-witnesses", type=int, default=0, metavar="K",
                     help="anchor verify: the log head needs K distinct witnesses (default 0)")
+    ks = add("keys", "key lifecycle: keys show|recovery|rotate|revoke|verify (maps/OWNER/keys.jsonl)")
+    ksub = ks.add_subparsers(dest="keys_cmd", metavar="KEYSCOMMAND", required=True)
+    ksub.add_parser("show", help="list OWNER's key events and current lineages", parents=[common]) \
+        .add_argument("owner")
+    r = ksub.add_parser("recovery", help="owner pre-registers a recovery public key", parents=[common])
+    for x in ("owner", "owner_key", "recovery_pub"):
+        r.add_argument(x)
+    r.add_argument("--sign", dest="old_recovery", metavar="OLD_RECOVERY_KEY",
+                   help="replacing a recovery key: the old recovery private key must sign too")
+    r.add_argument("--reason", default="register recovery key")
+    r = ksub.add_parser("rotate", help="rotate the owner's or an agent's key", parents=[common])
+    for x in ("owner", "subject", "new_pub"):
+        r.add_argument(x)
+    r.add_argument("--sign", action="append", required=True, metavar="KEY",
+                   help="private key(s): owner rotation = old (or recovery) + new; agent = owner [+ old agent]")
+    r.add_argument("--reason", default="rotate")
+    r = ksub.add_parser("revoke", help="revoke a key (compromised): its signatures go red", parents=[common])
+    for x in ("owner", "subject", "key"):
+        r.add_argument(x)
+    r.add_argument("--by", choices=("owner", "recovery"), required=True)
+    r.add_argument("--signer", required=True, metavar="KEY", help="the owner's or recovery private key")
+    r.add_argument("--reason", default="revoke")
+    ksub.add_parser("verify", help="every key chain intact and agreeing with maps/allowed_signers",
+                    parents=[common])
     return p
+
+
+def keys_cmd(a, base: str) -> int:
+    try:
+        if a.keys_cmd == "show":
+            print("\n".join(keychain.show(base, a.owner)))
+            return 0
+        if a.keys_cmd == "verify":
+            return 0 if keychain.key_checks(base, print) else 1
+        if a.keys_cmd == "recovery":
+            st = keychain.recovery(base, a.owner, a.owner_key, a.recovery_pub, a.old_recovery, a.reason)
+            print(f"{a.owner}: recovery key {keychain.fp(st.recovery)} registered")
+        elif a.keys_cmd == "rotate":
+            st = keychain.rotate(base, a.owner, a.subject, a.new_pub, a.sign, a.reason)
+            lin = st.owner if a.subject == "owner" else st.agents[a.subject.split(":", 1)[1]]
+            print(f"{a.owner}:{a.subject}: rotated to {keychain.fp(lin.current)} ({lin.describe()}); map re-signed")
+        elif a.keys_cmd == "revoke":
+            keychain.revoke(base, a.owner, a.subject, a.key, a.by, a.signer, a.reason)
+            print(f"{a.owner}:{a.subject}: key {keychain.fp(keychain.read_pub(a.key))} REVOKED")
+        print("next: `index` (and `log append`) to publish the new key chain", file=sys.stderr)
+        return 0
+    except (ValueError, OSError, KeyError) as e:
+        print(f"keys {a.keys_cmd}: {e}", file=sys.stderr)
+        return 1
 
 
 def anchor_cmd(a, base: str) -> int:
@@ -162,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
         return log_cmd(a, base)
     elif cmd == "anchor":
         return anchor_cmd(a, base)
+    elif cmd == "keys":
+        return keys_cmd(a, base)
     elif cmd == "verify":
         return 0 if verify(base) else 1
     elif cmd == "diff":

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .hashing import sha
+from .keys import agent_lineages
 from .signing import agent_sig_ok
 from .world import load, owners
 
@@ -13,9 +14,10 @@ def identity_checks(base: str, say) -> bool:
     for o in owners(base):
         nodes = load(base, o)["nodes"]
         agents = {n["id"]: n for n in nodes if "pubkey" in n}
+        lineages = agent_lineages(base, o)        # {} without keys.jsonl: the map's pubkey only
         for n in nodes:
             if "by" in n:
-                why = agent_sig_ok(base, o, n, agents)
+                why = agent_sig_ok(base, o, n, agents, lineages.get(n["by"]))
                 say(f"{'ok ' if why is None else 'RED'}  {o}:{n['id']} written by agent {o}:{n['by']}"
                     + ("" if why is None else f": {why}"))
                 ok &= why is None
@@ -47,11 +49,16 @@ def _gather(base: str):
     links: dict[str, set[str]] = {}
     keys: dict[str, str] = {}
     for o in owners(base):
+        lineages = agent_lineages(base, o)
         for n in load(base, o)["nodes"]:
             ref = f"{o}:{n['id']}"
             by_label.setdefault(n["label"].casefold(), []).append(ref)
             links[ref] = set(n.get("same_as", []))
-            if "pubkey" in n:
+            if n["id"] in lineages:               # stable id = first key of the lineage
+                lin = lineages[n["id"]]
+                keys[ref] = lin.id + (f", rotated {lin.rotations} time{'s' if lin.rotations != 1 else ''}"
+                                      if lin.rotations else "")
+            elif "pubkey" in n:
                 keys[ref] = "key " + sha(n["pubkey"].encode())[:8]
     return by_label, links, keys
 

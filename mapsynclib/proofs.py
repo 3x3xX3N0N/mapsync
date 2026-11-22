@@ -117,7 +117,10 @@ def _check(p: dict, allowed_signers: str, top_root: str | None) -> str | None:
         return f"root.sig is not {owner}'s signature on the map root"
     # 5. the owner's entry and the term list sit under top_root
     e = ix["entry"]
-    if e != {"owner": owner, "root": mp["root"], "sig_sha": sha(mp["root_sig"].encode())}:
+    want = {"owner": owner, "root": mp["root"], "sig_sha": sha(mp["root_sig"].encode())}
+    if isinstance(e, dict) and isinstance(e.get("keys_sha"), str) and len(e["keys_sha"]) == 64:
+        want["keys_sha"] = e["keys_sha"]          # the owner's key chain, committed (not revealed)
+    if e != want:
         return "index entry does not match the owner, map root and signature"
     m, j = ix["leaf_count"], ix["entry_index"]
     if not 0 <= j < m - 1:

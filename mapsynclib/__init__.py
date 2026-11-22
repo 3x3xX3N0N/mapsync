@@ -9,6 +9,7 @@
     proofs    prove / check_proof: one node's inclusion proof (selective disclosure)
     sync      sync-check: compare two worlds' top roots, walk down to owner and node
     log       log/roots.jsonl: append-only hash-chained log of top roots; fork detection
+    keys      maps/<owner>/keys.jsonl: key rotation, revocation, recovery; stable key lineages
     anchor    anchors/: witness-signed receipts for log entries (local anchoring)
     demo      make_world(dir): a complete signed world with fresh keys
     g1        sabotage each check; each must go red

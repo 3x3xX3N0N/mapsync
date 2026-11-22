@@ -117,6 +117,9 @@ def append(base: str, now: float | None = None) -> tuple[dict | None, str]:
     bad = [e["owner"] for e in fresh["maps"] if not sig_ok(base, e["owner"], e["root"])]
     if bad:
         raise ValueError(f"refusing to log an unsigned state: bad root signature for {', '.join(bad)}")
+    from .keys import key_checks
+    if not key_checks(base, lambda *a: None):
+        raise ValueError("refusing to log a state whose key chain checks fail (run keys verify)")
     if not identity_checks(base, lambda *a: None):
         raise ValueError("refusing to log a state that fails identity checks (run verify)")
     ip = os.path.join(base, "index.json")

@@ -52,14 +52,25 @@ def agent_sign(path: str, node_id: str, key: str, quiet: bool = False) -> None:
         print(f"{node['by']} signed {node_id}")
 
 
-def agent_sig_ok(base: str, owner: str, node: dict, agents: dict) -> str | None:
-    """None if good, else the reason it isn't."""
+def agent_sig_ok(base: str, owner: str, node: dict, agents: dict, lineage=None) -> str | None:
+    """None if good, else the reason it isn't. With a key lineage (mapsynclib.keys.Lineage) for
+    the agent, a signature by any non-revoked key in it counts; one by a revoked key is red."""
     a = agents.get(node["by"])
     if a is None:
         return f"by={node['by']!r} is not an agent node (no pubkey) in {owner}'s map"
     sig = os.path.join(base, "maps", owner, "agent_sigs", f"{node['id']}.sig")
     if not os.path.exists(sig):
         return "no agent signature"
+    if lineage is not None:
+        from .keys import fp, key_verifies, read_text
+        text = read_text(sig)
+        for k in reversed(lineage.keys):
+            if key_verifies(k, text, leaf(node), AGENT_NAMESPACE):
+                if lineage.status[k] == "revoked":
+                    return (f"signed by REVOKED key {fp(k)} of {owner}:{node['by']} "
+                            "(compromised): re-sign with the current key")
+                return None
+        return f"signature is not by any key in {owner}:{node['by']}'s lineage"
     with tempfile.NamedTemporaryFile("w", delete=False) as f:
         f.write(f"agent {a['pubkey']}\n")
     try:

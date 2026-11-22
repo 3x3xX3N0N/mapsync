@@ -69,4 +69,6 @@ def sync_report(a: str, b: str) -> tuple[bool, list[str]]:
                 out.append("    (no node differs: the map head changed — owner name or vocabulary)")
         elif ea[o]["sig_sha"] != eb[o]["sig_sha"]:
             out.append(f"~ {o}  same root, different signature (re-signed)")
+        elif ea[o].get("keys_sha") != eb[o].get("keys_sha"):
+            out.append(f"~ {o}  same root and signature, different key chain (maps/{o}/keys.jsonl)")
     return False, out

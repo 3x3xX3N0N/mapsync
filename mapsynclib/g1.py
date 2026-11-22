@@ -8,7 +8,8 @@ import shutil
 import tempfile
 
 from .anchor import ANCHORS, WITNESSES, anchor, anchors_dir, receipt_for, statement
-from .demo import add_witness, keygen
+from .demo import add_witness, fresh_key, keygen, make_world
+from . import keys as keychain
 from .files import append_text, read_json, write_json
 from .identity import names_report
 from .hashing import merkle
@@ -193,6 +194,87 @@ ANCHOR_ROWS = [
 ]
 
 
+def _keyed(d):
+    """Fixture: replace the sandbox's world with a freshly keyed demo world (keys in
+    d/keyworld/keys), rotate alice's Cody (signed by owner + old agent key) and register a
+    recovery key for alice. No log/anchors: they recorded the replaced world.
+    Returns the world dict plus "cody2", "alice_rec"."""
+    for x in ("maps", "log", ANCHORS):
+        shutil.rmtree(os.path.join(d, x), ignore_errors=True)
+    for x in ("index.json", "allowed_signers", WITNESSES):
+        if os.path.exists(os.path.join(d, x)):
+            os.remove(os.path.join(d, x))
+    kw = os.path.join(d, "keyworld")
+    w = make_world(kw, terms_from=d)
+    shutil.copytree(os.path.join(kw, "maps"), os.path.join(d, "maps"))
+    shutil.copy(os.path.join(kw, "allowed_signers"), d)
+    w["cody2"], pub = fresh_key(kw, "alice_cody2")
+    keychain.rotate(d, "alice", "agent:cody", pub, [w["owners"]["alice"], w["agents"]["alice:cody"]],
+                    now=1_700_000_000)
+    w["alice_rec"], rpub = fresh_key(kw, "alice_rec")
+    keychain.recovery(d, "alice", w["owners"]["alice"], rpub, now=1_700_000_100)
+    write_index(d)
+    return w
+
+
+def _owner_rotation_new_only(d):
+    w = _keyed(d)
+    k2, pub = fresh_key(os.path.join(d, "keyworld"), "alice2")
+    lines = keychain.read_lines(keychain.keys_path(d, "alice"))
+    e = keychain.event(lines, "rotate", "owner", w["pubkeys"]["alice"], pub, "takeover", {"new": k2},
+                       now=1_700_000_200)
+    keychain.write_lines(d, "alice", lines + [keychain.canonical(e)])
+    keychain.set_allowed_key(d, "alice", pub)       # everything else made consistent with the forgery
+    from .signing import sign
+    from .world import map_path
+    sign(map_path(d, "alice"), k2, d, quiet=True)
+    write_index(d)
+
+
+def _revoke_old_cody(d):
+    w = _keyed(d)                                   # review/notes still carry the old key's signatures
+    keychain.revoke(d, "alice", "agent:cody", w["pubkeys"]["alice:cody"], "owner", w["owners"]["alice"],
+                    now=1_700_000_200)
+    write_index(d)
+
+
+def _keys_lines(fn):
+    def go(d):
+        _keyed(d)
+        p = keychain.keys_path(d, "alice")
+        keychain.write_lines(d, "alice", fn(keychain.read_lines(p)))
+        write_index(d)
+    return go
+
+
+def _forge_reason(lines):
+    e = json.loads(lines[0])
+    e["reason"] = "nothing to see here"
+    return [keychain.canonical(e)] + lines[1:]
+
+
+def _stale_allowed_signers(d):
+    w = _keyed(d)
+    k2, pub = fresh_key(os.path.join(d, "keyworld"), "alice2")
+    keychain.rotate(d, "alice", "owner", pub, [w["owners"]["alice"], k2], now=1_700_000_200)
+    keychain.set_allowed_key(d, "alice", w["pubkeys"]["alice"])   # old key back, map re-signed by it
+    from .signing import sign
+    from .world import map_path
+    sign(map_path(d, "alice"), w["owners"]["alice"], d, quiet=True)
+    write_index(d)
+
+
+# (name, sabotage(dir), verify should be green?) -- on a freshly keyed world with keys.jsonl
+KEY_ROWS = [
+    ("keys: rotated agent key, old sigs stay green", _keyed, True),
+    ("rotation not signed by the old key", _owner_rotation_new_only, False),
+    ("signature by a revoked agent key", _revoke_old_cody, False),
+    ("forge a key chain line (edit reason)", _keys_lines(_forge_reason), False),
+    ("reorder the key chain's lines", _keys_lines(lambda ls: ls[::-1]), False),
+    ("allowed_signers disagrees with key chain", _stale_allowed_signers, False),
+]
+
+
 def _link_codys(d):
     for o, other in (("alice", "bob"), ("bob", "alice")):
         edit_map(o, lambda m, other=other: next(n for n in m["nodes"] if n["id"] == "cody")
@@ -282,6 +364,11 @@ def g1(base: str) -> bool:
         all_ok &= good
         print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
     for name, sabotage, want in ANCHOR_ROWS:
+        got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
+        good = got == want
+        all_ok &= good
+        print(f"{'ok ' if good else 'BAD'}  {name:48} -> {'green' if got else 'red'} (expected {'green' if want else 'red'})")
+    for name, sabotage, want in KEY_ROWS:
         got = run_row(base, sabotage, lambda d: verify(d, quiet=True))
         good = got == want
         all_ok &= good

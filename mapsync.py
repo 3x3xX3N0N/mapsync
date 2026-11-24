@@ -31,7 +31,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TERMS = os.path.join("sumo", "terms.txt")
 NAMESPACE = "mapsync"
 AGENT_NAMESPACE = "mapsync-agent"
-OPTIONAL = ("pubkey", "by", "same_as")
+REQUIRED = ("id", "label", "sumo", "content", "salt")
+OPTIONAL = ("pubkey", "by", "same_as")              # known extras; any other field is hashed too
 # pubkey  : this node IS an agent; its own ssh public key. Identity = this key, not the label.
 # by      : id of the agent (in this map) that wrote this node; needs agent_sigs/<id>.sig
 # same_as : ["owner:id", ...] this node is the same thing as that node. One side = claimed,
@@ -49,12 +50,15 @@ def load_terms(base: str) -> tuple[set[str], str]:
 
 
 def leaf(node: dict) -> str:
-    """A node's leaf hash. The salt stops anyone guessing short hidden content."""
-    fields = {k: node[k] for k in ("id", "label", "sumo", "content", "salt")}
-    for k in OPTIONAL:                            # agent key, author, identity links: all owner-signed
-        if k in node:
-            fields[k] = node[k]
-    canon = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """A node's leaf hash. The salt stops anyone guessing short hidden content.
+
+    EVERY field of the node is hashed, not only the known ones: a field that isn't hashed
+    rides along unsigned, and verify would call a tampered map green. Unknown fields are
+    allowed (they survive a round trip); they are just signed like the rest."""
+    for k in REQUIRED:
+        if k not in node:
+            raise KeyError(f"node {node.get('id', '?')!r} has no {k!r}")
+    canon = json.dumps(node, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha(b"\x00" + canon.encode())          # 0x00 = leaf, 0x01 = inner (no 2nd-preimage mixups)
 
 
@@ -76,8 +80,11 @@ def map_root(path: str, base: str) -> str:
         if n["sumo"] not in terms:
             raise ValueError(f"{path}: node {n['id']!r} tagged {n['sumo']!r}, not in pinned {TERMS}")
     nodes = sorted(m["nodes"], key=lambda n: n["id"])
-    # the owner and the vocabulary version are part of what gets signed
-    head = sha(json.dumps({"owner": m["owner"], "sumo_terms_sha": terms_sha}, sort_keys=True).encode())
+    # the owner, the vocabulary version and every other map-level field are part of what gets signed
+    top = {k: v for k, v in m.items() if k != "nodes"}
+    if "sumo_terms_sha" in top:
+        raise ValueError(f"{path}: 'sumo_terms_sha' is reserved")
+    head = sha(json.dumps({**top, "sumo_terms_sha": terms_sha}, sort_keys=True).encode())
     return merkle([head] + [leaf(n) for n in nodes])
 
 
@@ -266,6 +273,10 @@ def g1() -> bool:
         ("delete an agent's signature on its node", lambda d: os.remove(os.path.join(d, "maps", "alice", "agent_sigs", "notes.sig")), False),
         ("move an agent signature onto another node", lambda d: shutil.copy(os.path.join(d, "maps", "alice", "agent_sigs", "notes.sig"),
                                                                             os.path.join(d, "maps", "alice", "agent_sigs", "review.sig")), False),
+        ("add an unknown field to a node", edit_map("alice", lambda m: first(m).update(valid_until="2026-01-01")), False),
+        ("add an unknown field to an agent-written node", edit_map("bob", lambda m: next(n for n in m["nodes"] if "by" in n)
+                                                                    .update(note="x")), False),
+        ("add an unknown field to the map itself", edit_map("bob", lambda m: m.update(scope="public")), False),
         ("point same_as at a node that doesn't exist", edit_map("bob", lambda m: first(m).update(same_as=["alice:nope"])), False),
         ("edit the pinned SUMO term list", lambda d: open(os.path.join(d, TERMS), "a").write("Unicorn\n"), False),
         ("rewrite index.json top_root", lambda d: (lambda p, j: json.dump({**j, "top_root": "0" * 64}, open(p, "w")))(

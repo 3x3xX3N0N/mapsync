@@ -132,7 +132,9 @@ python3 mapsync.py index && python3 mapsync.py verify
 ```
 
 A node is `{id, label, sumo, content, salt}`, plus optionally `pubkey` (this node is an
-agent), `by` (an agent in this map wrote it) and `same_as` (list of `owner:id`). Use a
+agent), `by` (an agent in this map wrote it) and `same_as` (list of `owner:id`). Any other
+field is allowed and kept, and it is hashed and signed like the rest: there are no
+unsigned fields, at node or map level (`g1` checks that adding one goes red). Use a
 fresh random `salt` per node. An agent signs what it wrote with
 `python3 mapsync.py agent-sign maps/me/map.json NODE AGENT_KEY`, then the owner re-signs
 the map.
